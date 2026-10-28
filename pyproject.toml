@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hag"
+version = "0.1.0"
+description = "Software copyright (软著) application material generator exposed as an MCP server"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "heyuan" }]
+keywords = ["mcp", "software-copyright", "ruanzhu", "copyright"]
+classifiers = [
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+    "mcp>=1.2",
+    "pypdf>=4.0",
+    "fonttools>=4.40",
+]
+
+[project.optional-dependencies]
+pdf = ["fpdf2>=2.8"]
+docx = ["python-docx>=1.1"]
+images = ["pillow>=10.0"]
+test = ["pytest>=8.0"]
+all = ["hag[pdf,docx,images]"]
+
+[project.scripts]
+hag = "hag.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hag"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
