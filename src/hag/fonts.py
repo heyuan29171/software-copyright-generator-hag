@@ -148,7 +148,11 @@ def resolve_font_pair(workdir: Path | None = None) -> FontPair:
 
 
 def assert_coverage(fonts: FontPair, texts: Iterable[str]) -> None:
-    """Raise if any character cannot be drawn by either font."""
+    """Raise if any character cannot be drawn by either font.
+
+    Kept for callers that genuinely require every glyph, such as the header,
+    where a missing character would be visible on all sixty pages.
+    """
     missing = fonts.missing_characters(texts)
     if missing:
         listed = ", ".join(f"{ch!r} (U+{ord(ch):04X})" for ch in missing[:20])
@@ -157,6 +161,53 @@ def assert_coverage(fonts: FontPair, texts: Iterable[str]) -> None:
             f"neither {fonts.mono.label} nor {fonts.cjk.label} can render: "
             f"{listed}{more}"
         )
+
+
+# Substitution for characters the material fonts cannot draw.
+UNRENDERABLE_SUBSTITUTE = "?"
+
+# Range of code points that are almost certainly decorative when they appear in
+# source: emoji, pictographs, dingbats used as bullets, variation selectors and
+# zero-width joiners. A project with an emoji in a UI string is ordinary; it
+# must not stop the whole run.
+_DECORATIVE_RANGES: tuple[tuple[int, int], ...] = (
+    (0x1F000, 0x1FAFF),  # emoji and pictographs
+    (0x2600, 0x27BF),  # misc symbols and dingbats
+    (0x2B00, 0x2BFF),  # arrows and misc symbols
+    (0xFE00, 0xFE0F),  # variation selectors
+    (0x200D, 0x200D),  # zero-width joiner
+    (0x1F1E6, 0x1F1FF),  # regional indicators (flags)
+    (0xE0020, 0xE007F),  # tag characters
+)
+
+
+def is_decorative(char: str) -> bool:
+    """True when a character is decorative rather than information."""
+    code = ord(char)
+    return any(low <= code <= high for low, high in _DECORATIVE_RANGES)
+
+
+def sanitize_unrenderable(text: str, fonts: FontPair) -> tuple[str, list[str]]:
+    """Replace characters neither font can draw, reporting what was lost.
+
+    Replacing rather than aborting is the deliberate choice. An emoji in a UI
+    string is a normal thing to find in a real project, and refusing to produce
+    any material because of one is a worse outcome than printing a placeholder
+    and saying so. The substitution is visible, never silent.
+    """
+    out: list[str] = []
+    replaced: list[str] = []
+    for char in text:
+        if char in "\n\r\t":
+            out.append(char)
+            continue
+        if fonts.mono.has(char) or fonts.cjk.has(char):
+            out.append(char)
+            continue
+        out.append(UNRENDERABLE_SUBSTITUTE)
+        if char not in replaced:
+            replaced.append(char)
+    return "".join(out), replaced
 
 
 def environment_report() -> dict[str, str]:

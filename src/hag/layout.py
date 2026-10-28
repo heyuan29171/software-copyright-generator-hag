@@ -46,14 +46,18 @@ class CodeLayout:
 
     page_width_cm: Decimal = Decimal("21.0")
     page_height_cm: Decimal = Decimal("29.7")
+    # The published template uses 2cm top and 1cm bottom. The bottom margin is
+    # smaller than the top because the page number sits in the header, not the
+    # footer, which leaves more room for the fifty lines.
     margin_top_cm: Decimal = Decimal("2.0")
-    margin_bottom_cm: Decimal = Decimal("2.0")
-    margin_left_cm: Decimal = Decimal("2.5")
+    margin_bottom_cm: Decimal = Decimal("1.0")
+    margin_left_cm: Decimal = Decimal("2.0")
     margin_right_cm: Decimal = Decimal("2.0")
     header_distance_cm: Decimal = Decimal("1.27")
-    body_font_size_pt: Decimal = Decimal("7.2")
-    body_line_pt: Decimal = Decimal("14.0")
-    header_font_size_pt: Decimal = Decimal("8.0")
+    # SimSun at 10.5pt (小四/五号 in the template) with a fixed 15pt line.
+    body_font_size_pt: Decimal = Decimal("10.5")
+    body_line_pt: Decimal = Decimal("15.0")
+    header_font_size_pt: Decimal = Decimal("9.0")
     header_line_pt: Decimal = Decimal("12.0")
     tab_width: int = 4
     orientation: str = "portrait"
@@ -96,10 +100,18 @@ SPLIT_THRESHOLD_PAGES = 60
 SEGMENT_PAGES = SPLIT_THRESHOLD_PAGES // 2
 
 # [推] When exact 30+30 alignment is impossible without splitting a file, the
-# result may land in this band; the filename must then state the true page
-# counts. Outside this band we abort instead of guessing.
+# result may fall short of thirty pages. Falling slightly over is worse — a
+# reviewer counting pages sees a segment longer than the statute asks for — so
+# the preferred band is 28..30 and the tolerated maximum is 31. Anything beyond
+# that is refused rather than submitted with a caveat.
+#
+# The asymmetry matters in practice: projects with uniform file sizes only
+# step in file-sized increments, and 31 is sometimes the closest reachable
+# value. Reporting it honestly is better than refusing to produce material at
+# all, but it must be visible.
 FALLBACK_MIN_SEGMENT_PAGES = 28
-FALLBACK_MAX_SEGMENT_PAGES = 32
+FALLBACK_MAX_SEGMENT_PAGES = 30
+FALLBACK_HARD_MAX_SEGMENT_PAGES = 31
 
 # [审] Not statutory. A very short last page looks like padding.
 LAST_PAGE_MIN_RATIO = Decimal("2") / Decimal("3")
@@ -107,6 +119,12 @@ LAST_PAGE_MIN_RATIO = Decimal("2") / Decimal("3")
 # [推] Pathological lines are hard-wrapped before measuring so a single
 # minified line cannot blow up the wrapping pass.
 MAX_LINE_CHARS_HARD_CAP = 3000
+
+# [推] Upper bound on how many lines of a page may contain CJK characters.
+# Material that is mostly Chinese prose reads as a document rather than as a
+# program, and reviewers expect the identifying material to look like source
+# code. Zero disables the limit.
+MAX_CJK_LINES_PER_PAGE = 10
 
 # [官] 问题问答: page number sits at the top-right, plain digits.
 PAGE_NUMBER_POSITION = "top-right"

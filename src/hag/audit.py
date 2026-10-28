@@ -356,6 +356,51 @@ def check_placement_guards(found: Sequence[tuple[str, str]]) -> list[Check]:
     ]
 
 
+def check_cjk_line_density(
+    pages: Sequence[Sequence[str]], max_cjk_lines: int
+) -> list[Check]:
+    """How many lines per page contain Chinese characters.
+
+    Material that is mostly Chinese reads as prose rather than as a program.
+    The limit is a judgement call, not a published rule, and it is reported as
+    a warning rather than a failure for that reason.
+    """
+    if max_cjk_lines <= 0 or not pages:
+        return [Check("W-20", Level.PASS, "未启用中文行数限制")]
+
+    def has_cjk(line: str) -> bool:
+        return any("\u4e00" <= ch <= "\u9fff" for ch in line)
+
+    counts = [sum(1 for line in page if has_cjk(line)) for page in pages]
+    over = [
+        (index, count)
+        for index, count in enumerate(counts, start=1)
+        if count > max_cjk_lines
+    ]
+
+    if not over:
+        worst = max(counts) if counts else 0
+        return [
+            Check(
+                "W-20",
+                Level.PASS,
+                f"每页中文行数不超过 {max_cjk_lines} 行（最多 {worst} 行）",
+            )
+        ]
+
+    listed = "、".join(f"第 {i} 页 {c} 行" for i, c in over[:10])
+    return [
+        Check(
+            "W-20",
+            Level.WARN,
+            f"{len(over)} 页的中文行数超过 {max_cjk_lines} 行",
+            listed + ("…" if len(over) > 10 else ""),
+            "工程判断（非法规要求）",
+            "改写选取范围，优先选含中文较少的源码文件",
+        )
+    ]
+
+
 def check_output_files(paths: Sequence[Path]) -> list[Check]:
     """Every promised artifact must exist and be non-empty."""
     missing = [p for p in paths if not p.is_file()]

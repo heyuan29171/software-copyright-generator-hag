@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from .layout import (
+    FALLBACK_HARD_MAX_SEGMENT_PAGES,
     FALLBACK_MAX_SEGMENT_PAGES,
     FALLBACK_MIN_SEGMENT_PAGES,
     LINES_PER_PAGE,
@@ -297,24 +298,37 @@ def _fallback_selection(
     # Search both cut points together. Fixing only the front cut and taking
     # "everything else" as the back segment is wrong whenever the project is
     # much longer than 60 pages: the middle files should simply be skipped.
+    #
+    # The preferred band is tried first. Only if it yields nothing is the
+    # wider band considered, because projects with uniformly sized files step
+    # in file-sized increments and cannot hit 28..30 at all; refusing to
+    # produce anything there would be worse than a documented 31.
     target_lines = SEGMENT_PAGES * lines_per_page
-    best: tuple[int, int, int] | None = None  # (delta, front_k, back_start)
 
-    for front_k in range(1, len(counts)):
-        front_lines = prefix[front_k]
-        front_pages = _pages_for(front_lines, lines_per_page)
-        if not (FALLBACK_MIN_SEGMENT_PAGES <= front_pages <= FALLBACK_MAX_SEGMENT_PAGES):
-            continue
-        for back_start in range(front_k, len(counts)):
-            back_lines = total_lines - prefix[back_start]
-            if back_lines <= 0:
+    def search(lo: int, hi: int) -> tuple[int, int, int] | None:
+        best: tuple[int, int, int] | None = None
+        for front_k in range(1, len(counts)):
+            front_lines = prefix[front_k]
+            front_pages = _pages_for(front_lines, lines_per_page)
+            if not (lo <= front_pages <= hi):
                 continue
-            back_pages = _pages_for(back_lines, lines_per_page)
-            if not (FALLBACK_MIN_SEGMENT_PAGES <= back_pages <= FALLBACK_MAX_SEGMENT_PAGES):
-                continue
-            delta = abs(front_lines - target_lines) + abs(back_lines - target_lines)
-            if best is None or delta < best[0]:
-                best = (delta, front_k, back_start)
+            for back_start in range(front_k, len(counts)):
+                back_lines = total_lines - prefix[back_start]
+                if back_lines <= 0:
+                    continue
+                back_pages = _pages_for(back_lines, lines_per_page)
+                if not (lo <= back_pages <= hi):
+                    continue
+                delta = abs(front_lines - target_lines) + abs(back_lines - target_lines)
+                if best is None or delta < best[0]:
+                    best = (delta, front_k, back_start)
+        return best
+
+    best = search(FALLBACK_MIN_SEGMENT_PAGES, FALLBACK_MAX_SEGMENT_PAGES)
+    used_wider_band = False
+    if best is None:
+        best = search(FALLBACK_MIN_SEGMENT_PAGES, FALLBACK_HARD_MAX_SEGMENT_PAGES)
+        used_wider_band = best is not None
 
     if best is None:
         # Report the closest single-cut attempt to keep the message concrete.
@@ -329,7 +343,7 @@ def _fallback_selection(
             f"cannot approach 30+30 pages within the allowed tolerance: the closest "
             f"file-boundary split gives front {_pages_for(prefix[approx_k], lines_per_page)} "
             f"pages and back {_pages_for(total_lines - prefix[approx_k], lines_per_page)} "
-            f"pages, outside {FALLBACK_MIN_SEGMENT_PAGES}-{FALLBACK_MAX_SEGMENT_PAGES}. "
+            f"pages, outside {FALLBACK_MIN_SEGMENT_PAGES}-{FALLBACK_HARD_MAX_SEGMENT_PAGES}. "
             "Select different files, ideally several smaller ones near the middle, "
             "then retry."
         )
@@ -339,6 +353,18 @@ def _fallback_selection(
     back_lines = total_lines - prefix[back_start]
     front_pages = _pages_for(front_lines, lines_per_page)
     back_pages = _pages_for(back_lines, lines_per_page)
+
+    warnings: list[str] = [
+        f"exact 30+30 could not be reached; material is front {front_pages} "
+        f"pages and back {back_pages} pages. The filename states the true "
+        "counts so it cannot be mistaken for 30+30."
+    ]
+    if used_wider_band and max(front_pages, back_pages) > FALLBACK_MAX_SEGMENT_PAGES:
+        warnings.append(
+            f"其中一段为 {max(front_pages, back_pages)} 页，略多于 30 页。"
+            "这是在不切断文件的前提下最接近的结果；若要严格凑成 30 页，"
+            "请选择更多小体量文件后重试。"
+        )
 
     return Selection(
         mode=SelectionMode.FRONT_BACK,
@@ -351,11 +377,7 @@ def _fallback_selection(
         front_end_line=front_lines,
         back_start_line=total_lines - back_lines + 1,
         exact=False,
-        warnings=(
-            f"exact 30+30 could not be reached; material is front {front_pages} "
-            f"pages and back {back_pages} pages. The filename states the true "
-            "counts so it cannot be mistaken for 30+30.",
-        ),
+        warnings=tuple(warnings),
     )
 
 

@@ -19,11 +19,17 @@ than producing a document that is one page longer than its own filename claims.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
 
-from .fonts import FontError, FontPair, assert_coverage, resolve_font_pair
+from .fonts import (
+    FontError,
+    FontPair,
+    assert_coverage,
+    resolve_font_pair,
+    sanitize_unrenderable,
+)
 from .layout import CODE_LAYOUT, LINES_PER_PAGE, CodeLayout, assert_layout_invariants
 from .pagination import sanitize_line
 
@@ -65,6 +71,7 @@ class RenderResult:
     lines_per_page: int
     header_left: str
     page_line_counts: list[int]
+    replaced_characters: list[str] = field(default_factory=list)
 
     @property
     def is_uniform(self) -> bool:
@@ -160,7 +167,14 @@ def render_code_pdf(
 
     fonts = fonts or resolve_font_pair()
     all_lines = [line for page in pages for line in page]
-    assert_coverage(fonts, [header.left, *all_lines])
+
+    # The header appears on every page, so a missing glyph there would be
+    # wrong everywhere; that still aborts. Body text is different: an emoji in
+    # a UI string is ordinary, and refusing to produce material over it would
+    # leave the user with nothing. Such characters become "?" and are reported.
+    assert_coverage(fonts, [header.left])
+    sanitized_pages, replaced = _sanitize_pages(pages, fonts)
+    pages = sanitized_pages
 
     FPDF = _require_fpdf()
 
@@ -244,7 +258,29 @@ def render_code_pdf(
         lines_per_page=expected_lines,
         header_left=header.left,
         page_line_counts=[len(p) for p in pages],
+        replaced_characters=replaced,
     )
+
+
+def _sanitize_pages(
+    pages: Sequence[Sequence[str]], fonts: FontPair
+) -> tuple[list[list[str]], list[str]]:
+    """Replace undrawable body characters, collecting what was replaced.
+
+    Line breaks are preserved, so the page count is unaffected by substitution.
+    """
+    sanitized: list[list[str]] = []
+    replaced: list[str] = []
+    for page in pages:
+        new_page: list[str] = []
+        for line in page:
+            cleaned, lost = sanitize_unrenderable(line, fonts)
+            for char in lost:
+                if char not in replaced:
+                    replaced.append(char)
+            new_page.append(cleaned)
+        sanitized.append(new_page)
+    return sanitized, replaced
 
 
 def prepare_page_lines(lines: Sequence[str], tab_width: int = 4) -> list[str]:

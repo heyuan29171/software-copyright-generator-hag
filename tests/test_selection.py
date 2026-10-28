@@ -80,10 +80,10 @@ class TestExactFrontBack:
 
 class TestFallback:
     def test_tolerated_deviation_reports_truth(self) -> None:
-        # 29 pages then a one-file bridge then 30 pages: an exact 30/30 cut is
-        # impossible because the bridge cannot be split, but 29+31 is inside
+        # 29 pages, a one-file bridge, then 29 pages: an exact 30/30 cut is
+        # impossible because the bridge cannot be split, but 29+29 is inside
         # the tolerated band.
-        selection = select_material(spans(29 * LINES_PER_PAGE, 10, 31 * LINES_PER_PAGE))
+        selection = select_material(spans(1450, 200, 1450))
         assert selection.mode is SelectionMode.FRONT_BACK
         if selection.exact:
             pytest.skip("arrangement happened to be exact")
@@ -91,8 +91,18 @@ class TestFallback:
         assert FALLBACK_MIN_SEGMENT_PAGES <= selection.back_pages <= FALLBACK_MAX_SEGMENT_PAGES
         assert selection.warnings
 
+    def test_never_exceeds_thirty_pages_per_segment(self) -> None:
+        """The band is asymmetric: short is tolerable, long is not.
+
+        Submitting 32 pages where the statute asks for 30 is a different thing
+        from submitting 29, and a reviewer counting pages will see it.
+        """
+        selection = select_material(spans(1450, 200, 1450))
+        assert selection.front_pages <= 30
+        assert selection.back_pages <= 30
+
     def test_title_states_real_total_when_inexact(self) -> None:
-        selection = select_material(spans(29 * LINES_PER_PAGE, 10, 31 * LINES_PER_PAGE))
+        selection = select_material(spans(1450, 200, 1450))
         if selection.exact:
             pytest.skip("arrangement happened to be exact")
         # Only an exact 30+30 may claim 30+30; anything else states the total,
@@ -172,8 +182,8 @@ class TestNoFileIsSplit:
         assert {f.rel_path for f in selection.ordered_files} == {f.rel_path for f in files}
 
     def test_reordering_does_not_change_total_lines(self) -> None:
-        # Mixed sizes that still admit a boundary-aligned split.
-        files = spans(700, 900, 1200, 300, 450, 350, 400)
+        # Mixed sizes whose boundaries land inside the tolerated band.
+        files = spans(1450, 600, 1450)
         selection = select_material(files)
         assert selection.total_lines == sum(f.line_count for f in files)
 

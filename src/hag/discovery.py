@@ -57,6 +57,17 @@ SKIP_DIRS = frozenset(
 # Filenames never included.
 SKIP_FILES = frozenset(
     {
+        # Version-control housekeeping. These are configuration for git, not
+        # part of the software, and their `#` lines are comments that would
+        # otherwise survive into the material.
+        ".gitignore",
+        ".gitattributes",
+        ".gitmodules",
+        ".dockerignore",
+        ".eslintignore",
+        ".prettierignore",
+        ".npmignore",
+        ".editorconfig",
         "package-lock.json",
         "yarn.lock",
         "pnpm-lock.yaml",

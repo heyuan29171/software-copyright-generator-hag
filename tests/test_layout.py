@@ -41,9 +41,11 @@ class TestPageGeometry:
         assert float(CODE_LAYOUT.page_height_pt) == pytest.approx(841.9, abs=0.1)
 
     def test_body_area(self) -> None:
-        # 21 - 2.5 - 2.0 = 16.5cm wide; 29.7 - 2.0 - 2.0 = 25.7cm tall
-        assert float(CODE_LAYOUT.body_width_pt) == pytest.approx(467.7, abs=0.2)
-        assert float(CODE_LAYOUT.body_height_pt) == pytest.approx(728.5, abs=0.2)
+        # Width: 21 - 2.0 - 2.0 = 17cm. Height: 29.7 - 2.0 - 1.0 = 26.7cm.
+        # The bottom margin is smaller because the page number lives in the
+        # header, which is what makes 50 lines at 15pt fit.
+        assert float(CODE_LAYOUT.body_width_pt) == pytest.approx(481.9, abs=0.2)
+        assert float(CODE_LAYOUT.body_height_pt) == pytest.approx(756.9, abs=0.2)
 
 
 class TestLineCount:
@@ -52,16 +54,31 @@ class TestLineCount:
         assert LINES_PER_PAGE >= 50
 
     def test_fifty_lines_fit(self) -> None:
-        """The documented 7.2pt/14pt combination must fit 50 lines."""
+        """The published template combination must fit exactly 50 lines."""
         assert 50 * CODE_LAYOUT.body_line_pt <= CODE_LAYOUT.body_height_pt
 
-    def test_max_lines_is_52(self) -> None:
-        # 728.5pt / 14pt = 52.03 -> 52. This is why 50 is chosen and 55 is not.
-        assert max_lines_per_page() == 52
+    def test_max_lines_is_exactly_fifty(self) -> None:
+        """50 is not a comfortable fit; it is what the geometry allows.
+
+        756.9pt of body area divided by a 15pt line leaves room for 50 lines
+        with 6.9pt to spare. The old 7.2pt/14pt combination allowed 52, which
+        is why the template's own numbers matter: they leave no slack for a
+        renderer to drift.
+        """
+        assert max_lines_per_page() == 50
 
     def test_fifty_five_lines_do_not_fit(self) -> None:
         """Guards against the upstream 55-lines-per-page mistake."""
         assert 55 * CODE_LAYOUT.body_line_pt > CODE_LAYOUT.body_height_pt
+
+    def test_body_area_exists_because_bottom_margin_is_smaller(self) -> None:
+        """With symmetric 2cm margins, 50 lines at 15pt would not fit."""
+        from decimal import Decimal
+
+        symmetric_height = (
+            CODE_LAYOUT.page_height_cm - Decimal("2.0") - Decimal("2.0")
+        ) / Decimal("2.54") * Decimal(72)
+        assert 50 * CODE_LAYOUT.body_line_pt > symmetric_height
 
 
 class TestSplitRules:

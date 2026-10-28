@@ -21,6 +21,7 @@ from .audit import (
     Check,
     Level,
     Report,
+    check_cjk_line_density,
     check_comment_residue,
     check_header,
     check_input_completeness,
@@ -31,6 +32,7 @@ from .audit import (
     check_version_consistency,
 )
 from .application import REQUIRED_FIELDS
+from .layout import MAX_CJK_LINES_PER_PAGE
 from .pipeline import PipelineError, PipelineResult, run_code_pipeline
 from .render_pdf import HeaderSpec
 
@@ -169,6 +171,20 @@ def build_materials(
                 [len(p) for p in result.pages], result.selection.lines_per_page
             )
         )
+        report.extend(check_cjk_line_density(result.pages, MAX_CJK_LINES_PER_PAGE))
+        if result.render and result.render.replaced_characters:
+            report.add(
+                Check(
+                    "W-21",
+                    Level.WARN,
+                    f"{len(result.render.replaced_characters)} 个字符无法渲染，已替换为 ?",
+                    "、".join(
+                        f"U+{ord(c):04X}" for c in result.render.replaced_characters[:10]
+                    ),
+                    "字体不包含这些字形（通常是 emoji）",
+                    "如需保留原字符，可改用包含 emoji 的字体",
+                )
+            )
     report.extend(check_header(header.left, software_name, version))
     # Compare what was drawn into the document against what the form will
     # carry. Both currently derive from the same argument, so this only fires
