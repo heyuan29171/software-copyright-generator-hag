@@ -19,6 +19,7 @@ Sources, and what each actually says:
 from __future__ import annotations
 
 from collections.abc import Sequence
+from pathlib import Path
 from dataclasses import dataclass
 from enum import Enum
 
@@ -137,6 +138,59 @@ class Finding:
     severity: Severity = Severity.FAIL
 
 
+def page_numbers_from_pdf(pdf_path: Path) -> list[str]:
+    """Extract the page-number label printed on each page.
+
+    The header puts the number after the software name and version, so the
+    first token that is purely digits at the end of the header line is the
+    label. Returns one entry per page, empty string when nothing was found.
+    """
+    from pypdf import PdfReader
+
+    labels: list[str] = []
+    reader = PdfReader(str(pdf_path))
+    for page in reader.pages:
+        text = page.extract_text() or ""
+        first_line = next((ln for ln in text.splitlines() if ln.strip()), "")
+        found = ""
+        for token in reversed(first_line.split()):
+            token = token.strip()
+            if token.isdigit():
+                found = token
+                break
+        labels.append(found)
+    return labels
+
+
+def check_code_page_start(pdf_path: Path) -> tuple[bool, str]:
+    """Source pages must run 1, 2, 3... without gaps or restarts.
+
+    Returns a verdict rather than raising: a missing or unreadable file is a
+    failure of this requirement, and the caller needs to record that rather
+    than crash halfway through building a report.
+    """
+    if not pdf_path.is_file():
+        return False, f"文件不存在：{pdf_path.name}"
+
+    try:
+        labels = page_numbers_from_pdf(pdf_path)
+    except Exception as exc:
+        return False, f"无法读取 PDF 页码：{type(exc).__name__}"
+
+    if not labels:
+        return False, "PDF 没有页面"
+    expected = [str(i) for i in range(1, len(labels) + 1)]
+    if labels == expected:
+        return True, f"页码自 1 连续编至 {len(labels)}"
+    first_bad = next(
+        (i for i, (got, want) in enumerate(zip(labels, expected), 1) if got != want),
+        None,
+    )
+    if first_bad is None:
+        return False, f"共 {len(labels)} 页，页码序列不匹配"
+    return False, f"第 {first_bad} 页页码应为 {expected[first_bad-1]}，实际为「{labels[first_bad-1] or '空'}」"
+
+
 def verify_official(
     *,
     page_width_cm: float,
@@ -159,6 +213,8 @@ def verify_official(
     first_publication_date: str,
     first_publication_place: str,
     owner_category: str,
+    pdf_path: Path | None = None,
+    manual_page_labels: Sequence[str] | None = None,
 ) -> list[Finding]:
     """Check each published requirement against the produced material."""
     out: list[Finding] = []
@@ -206,8 +262,28 @@ def verify_official(
         page_number_position == "top-right",
         f"当前 {page_number_position}",
     )
-    add("code_page_start", True, "程序页码自正文第 1 页起编")
-    add("manual_page_start", True, "手册页码自目录起编")
+
+    # Read the numbers back out of the finished file rather than trusting the
+    # renderer's own claim.
+    if pdf_path is not None and Path(pdf_path).is_file():
+        ok, detail = check_code_page_start(Path(pdf_path))
+        add("code_page_start", ok, detail)
+    else:
+        add("code_page_start", output_format.lower() != "pdf", "未渲染 PDF，无法核对页码")
+
+    if manual_page_labels is None:
+        add("manual_page_start", True, "未生成手册，页码规则仅在生成时适用")
+    else:
+        expected = [str(i) for i in range(1, len(manual_page_labels) + 1)]
+        ok = list(manual_page_labels) == expected
+        add(
+            "manual_page_start",
+            ok,
+            f"手册页码自 1 连续编至 {len(manual_page_labels)}"
+            if ok
+            else "手册页码未从目录起连续编号",
+        )
+
     add(
         "name_consistency",
         software_name in header_text and version in header_text,
@@ -218,7 +294,12 @@ def verify_official(
         output_format.lower() == "pdf",
         f"当前 {output_format}",
     )
-    add("signature_page_untouched", True, "本工具不生成签章页")
+    # The tool must never emit this page; producing one would be the violation.
+    add(
+        "signature_page_untouched",
+        not _contains_signature_page(pdf_path),
+        "输出中不含申请确认签章页",
+    )
     add("complete_materials", rendered_pages > 0, f"已生成 {rendered_pages} 页")
     add(
         "version_verbatim",
@@ -248,6 +329,28 @@ def verify_official(
     )
 
     return out
+
+
+_SIGNATURE_MARKERS = ("申请确认签章页", "申请人签章", "著作权登记申请表")
+
+
+def _contains_signature_page(pdf_path: Path | None) -> bool:
+    """True when the output looks like it includes the Centre's signature page.
+
+    The signature page must be printed from the online system and signed by
+    hand; reproducing it here would breach the instruction not to alter its
+    content, format or print scale.
+    """
+    if pdf_path is None or not Path(pdf_path).is_file():
+        return False
+    from pypdf import PdfReader
+
+    reader = PdfReader(str(pdf_path))
+    for page in reader.pages:
+        text = page.extract_text() or ""
+        if any(marker in text for marker in _SIGNATURE_MARKERS):
+            return True
+    return False
 
 
 def summary(findings: Sequence[Finding]) -> tuple[int, int]:

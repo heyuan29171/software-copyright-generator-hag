@@ -42,6 +42,25 @@ pip install -e ".[all]"
 
 材料会输出到项目目录下的 `软件著作权申请资料/`，点「打开输出目录」即可查看。窗口内会显示生成的页数，或未通过校验的具体原因。
 
+**同一个 exe 也能给 agent 用。** 双击时打开窗口；由 MCP 客户端启动时（带 `--mcp`）直接提供全部工具，不弹窗口：
+
+```json
+{
+  "mcpServers": {
+    "hag": {
+      "command": "D:/路径/软著申请材料生成器.exe",
+      "args": ["--mcp"]
+    }
+  }
+}
+```
+
+| 启动方式 | 行为 |
+|---|---|
+| 双击 / 无参数 | 打开图形界面 |
+| `--mcp` | 以 stdio 提供 MCP 工具，供 agent 调用 |
+| `--self-test` | 自检：真实生成一份材料并检查字体，用于验证打包结果 |
+
 ### 图形界面（开发者，无需打包）
 
 ```bash
@@ -101,16 +120,18 @@ pip install pyinstaller
 python scripts/build_exe.py
 ```
 
-产物：`dist/软著申请材料生成器.exe`（单文件、无控制台、约 45 MB）。
+产物：`dist/软著申请材料生成器.exe`（单文件、无控制台、约 53 MB）。
 
 打包后必须验证功能而不只是能开窗：
 
 ```bash
-python scripts/build_exe.py --console        # 构建带控制台的自检版
-dist/软著申请材料生成器-verify.exe --self-test
+# 三种模式都要过
+dist/软著申请材料生成器.exe --self-test
 ```
 
-自检会真实生成一份 60 页 PDF，并检查字体在打包后仍可用。
+`--self-test` 会真实生成一份 60 页 PDF 并检查字体。MCP 模式需另用客户端探测（见 `scripts/` 下的探针脚本说明）。
+
+> 构建脚本把 `mcp` 显式列入 hidden-import 与 collect-submodules。早期版本曾把 `mcp` 放进 exclude 列表，导致 exe 无法供 agent 调用——这类问题只有真正跑一遍 MCP 握手才会暴露。
 
 ## 文档
 

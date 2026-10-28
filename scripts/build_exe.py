@@ -22,8 +22,8 @@ ENTRY = ROOT / "src" / "hag" / "app.py"
 DIST = ROOT / "dist"
 BUILD = ROOT / "build"
 
-# Modules imported lazily or via the mcp SDK that PyInstaller cannot see by
-# scanning alone. Missing any of these shows up as a crash only at runtime.
+# Modules imported lazily or through the mcp SDK that PyInstaller cannot see
+# by scanning alone. Missing any of these shows up as a crash at runtime.
 HIDDEN_IMPORTS = [
     "fpdf",
     "fontTools",
@@ -32,14 +32,20 @@ HIDDEN_IMPORTS = [
     "fontTools.pens.recordingPen",
     "pypdf",
     "pypdf._reader",
+    # The mcp server is reachable only through ``hag.app --mcp``. PyInstaller
+    # follows imports statically, so the whole package is named explicitly.
+    "mcp",
+    "mcp.server",
+    "mcp.server.mcpserver",
+    "mcp.server.stdio",
+    "mcp.types",
 ]
 
 # Packages whose submodules are reached dynamically.
-COLLECT_SUBMODULES = ["fpdf", "fontTools"]
+COLLECT_SUBMODULES = ["fpdf", "fontTools", "pypdf", "mcp"]
 
 EXCLUDES = [
-    # Not used by the desktop application, and large.
-    "mcp",
+    # Not used by either entry point, and large.
     "pytest",
     "numpy",
     "pandas",
@@ -62,7 +68,11 @@ def build(*, console: bool = False) -> Path:
             shutil.rmtree(directory)
 
     name = APP_NAME if not console else f"{APP_NAME}-verify"
-    entry = ENTRY if not console else ROOT / "scripts" / "self_test.py"
+    # Both variants use the real entry point, so the verify build exercises the
+    # same code paths as the shipped one. Earlier the verify build pointed at
+    # the self-test script instead, which meant it could not be used to check
+    # that ``--mcp`` works — the flag was swallowed by an unrelated argparse.
+    entry = ENTRY
 
     args = [
         sys.executable,

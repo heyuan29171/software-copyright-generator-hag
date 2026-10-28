@@ -23,10 +23,21 @@ import sys
 import traceback
 
 MCP_FLAG = "--mcp"
+SELF_TEST_FLAG = "--self-test"
 
 
 def _wants_mcp(argv: list[str]) -> bool:
     return MCP_FLAG in argv
+
+
+def _wants_self_test(argv: list[str]) -> bool:
+    """Internal verification mode, used after packaging.
+
+    It exists so the shipped entry point can be exercised end to end without a
+    second build target: a window that opens is not the same as a program that
+    generates material.
+    """
+    return SELF_TEST_FLAG in argv
 
 
 def _show_fatal(message: str) -> None:
@@ -79,8 +90,79 @@ def _run_mcp() -> int:
         return 1
 
 
+def _run_self_test() -> int:
+    """Generate one material end to end and report whether it worked.
+
+    Runs inside the packaged program, so it proves the bundle contains the PDF
+    renderer, the font tables and the parsers — things a "window opened" check
+    would miss.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from hag.fonts import resolve_font_pair
+    from hag.server import generate_materials, inspect_project
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        project = root / "sample"
+        project.mkdir()
+        for index in range(10):
+            body = "\n".join(f"const value{index}_{n} = {n};" for n in range(300))
+            (project / f"module{index}.ts").write_text(body + "\n", encoding="utf-8")
+
+        scan = inspect_project(str(project))
+        if not scan.get("ok"):
+            print("FAIL: scan:", scan.get("error"))
+            return 1
+        print(f"scan ok: {scan['source_files']} files")
+
+        result = generate_materials(
+            str(project),
+            "自检系统",
+            "V1.0",
+            output_dir=str(root / "out"),
+            fields={
+                "owner": "自检公司",
+                "owner_category": "法人",
+                "development_completed": "2025-03-01",
+                "dev_os": "Windows 11",
+                "dev_ide": "Visual Studio Code",
+                "purpose": "自检",
+                "domain": "测试",
+                "main_functions": "自检用功能描述，用于验证打包后的程序能够完整生成材料。" * 30,
+                "source_line_count": "3000",
+            },
+        )
+        if not result.get("ok"):
+            print("FAIL: blocking items:")
+            for item in result.get("blocking", []):
+                print("  -", item.get("name"), item.get("detail"))
+            return 1
+
+        pdfs = list((root / "out" / "正式资料").glob("*.pdf"))
+        if not pdfs or pdfs[0].stat().st_size == 0:
+            print("FAIL: no PDF")
+            return 1
+
+        pair = resolve_font_pair()
+        missing = pair.missing_characters(["自检系统 V1.0"])
+        if missing:
+            print("FAIL: fonts missing glyphs:", missing)
+            return 1
+
+        print(f"generation ok: {result.get('rendered_pages')} pages")
+        print(f"fonts ok: {pair.mono.path.name} + {pair.cjk.path.name}")
+
+    print("SELF-TEST PASSED")
+    return 0
+
+
 def main() -> int:
-    if _wants_mcp(sys.argv[1:]):
+    argv = sys.argv[1:]
+    if _wants_self_test(argv):
+        return _run_self_test()
+    if _wants_mcp(argv):
         return _run_mcp()
 
     try:

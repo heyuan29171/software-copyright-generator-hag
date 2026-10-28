@@ -232,6 +232,7 @@ def build_materials(
         first_publication_date=fields.first_publication_date if fields else "",
         first_publication_place=fields.first_publication_place if fields else "",
         owner_category=fields.owner_category if fields else "法人",
+        pdf_path=result.pdf_path,
     )
     for finding in official_findings:
         if finding.ok:
