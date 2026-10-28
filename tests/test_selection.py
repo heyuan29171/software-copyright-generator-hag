@@ -91,10 +91,14 @@ class TestFallback:
         assert FALLBACK_MIN_SEGMENT_PAGES <= selection.back_pages <= FALLBACK_MAX_SEGMENT_PAGES
         assert selection.warnings
 
-    def test_title_states_real_counts_when_inexact(self) -> None:
+    def test_title_states_real_total_when_inexact(self) -> None:
         selection = select_material(spans(29 * LINES_PER_PAGE, 10, 31 * LINES_PER_PAGE))
-        expected = f"前{selection.front_pages}页+后{selection.back_pages}页"
-        assert selection.title == f"代码({expected})"
+        if selection.exact:
+            pytest.skip("arrangement happened to be exact")
+        # Only an exact 30+30 may claim 30+30; anything else states the total,
+        # because the two segment counts do not add up to the real page count.
+        assert selection.title == f"代码(共{selection.rendered_pages}页)"
+        assert "前30页+后30页" not in selection.title
 
     def test_out_of_band_raises(self) -> None:
         # One enormous file makes a boundary-aligned 30/30 split impossible.
@@ -137,7 +141,28 @@ class TestSlices:
     def test_slices_cover_requested_pages(self) -> None:
         selection = select_material(spans(*([50] * 100)))
         covered = sum(end - start for start, end in material_slices(selection))
-        assert covered == selection.rendered_pages * LINES_PER_PAGE
+        assert covered == selection.rendered_lines
+
+    def test_rendered_pages_is_not_the_sum_of_segments(self) -> None:
+        """Concatenating and re-paginating can merge a partial page away.
+
+        A front segment ending 14 lines into its last page leaves room for the
+        back segment's first lines. Summing the segment page counts would
+        report one page too many, and that number goes on the application form.
+        """
+        selection = select_material(spans(1464, 1000, 1354))
+        slices = material_slices(selection)
+        covered = sum(end - start for start, end in slices)
+        expected = (covered + selection.lines_per_page - 1) // selection.lines_per_page
+        assert selection.rendered_pages == expected
+
+    def test_rendered_pages_matches_actual_pagination(self) -> None:
+        from hag.pagination import paginate
+
+        selection = select_material(spans(1464, 1000, 1354))
+        total = sum(end - start for start, end in material_slices(selection))
+        pages = paginate(["x"] * total, selection.lines_per_page)
+        assert len(pages) == selection.rendered_pages
 
 
 class TestNoFileIsSplit:

@@ -184,6 +184,18 @@ class TestPlaceholders:
     def test_clean_values_pass(self) -> None:
         assert validate(base_fields()) == []
 
+    def test_real_name_containing_shili_is_accepted(self) -> None:
+        """A company may legitimately contain 示例; rejecting it blocks valid work."""
+        assert validate(base_fields(owner="示例科技有限公司")) == []
+
+    def test_exact_shili_rejected(self) -> None:
+        issues = validate(base_fields(owner="示例"))
+        assert any("占位" in i.message for i in issues)
+
+    def test_todo_prefix_rejected(self) -> None:
+        issues = validate(base_fields(purpose="TODO: 补充开发目的"))
+        assert any("占位" in i.message for i in issues)
+
 
 class TestOrdering:
     def test_form_order_is_stable(self) -> None:

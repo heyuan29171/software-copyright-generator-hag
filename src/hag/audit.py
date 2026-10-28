@@ -324,11 +324,11 @@ def check_input_completeness(stated: dict[str, str], required: Sequence[str]) ->
     """Missing application fields cause non-acceptance, not a correction request."""
     missing = [name for name in required if not stated.get(name, "").strip()]
     if not missing:
-        return [Check("I-14", Level.PASS, "必填字段均已填写")]
+        return [Check("I-18", Level.PASS, "必填字段均已填写")]
 
     return [
         Check(
-            "I-14",
+            "I-18",
             Level.FAIL,
             f"{len(missing)} 个必填字段为空",
             "、".join(missing),

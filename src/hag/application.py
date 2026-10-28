@@ -72,15 +72,31 @@ REQUIRED_FIELDS: tuple[str, ...] = (
     "开发完成日期",
 )
 
-PLACEHOLDER_MARKERS: tuple[str, ...] = (
+# Markers that mean "this value was never filled in". These are matched as
+# whole values or standalone markers, never as substrings: a real company name
+# may legitimately contain 示例, and rejecting it would be a false positive
+# that blocks valid work.
+PLACEHOLDER_EXACT: frozenset[str] = frozenset(
+    {
+        "待用户确认",
+        "待补充",
+        "待确认",
+        "TODO",
+        "TBD",
+        "N/A",
+        "无",
+        "示例",
+        "Demo",
+        "ACME",
+        "XX",
+    }
+)
+
+PLACEHOLDER_PREFIXES: tuple[str, ...] = (
     "待用户确认",
     "待补充",
-    "待确认",
-    "TODO",
-    "示例",
-    "XX系统",
-    "ACME",
-    "Demo",
+    "TODO:",
+    "TBD:",
 )
 
 _SHORT_NAME_FORBIDDEN = "无"
@@ -314,14 +330,16 @@ def validate(fields: ApplicationFields) -> list[FieldIssue]:
                 )
             )
 
-    # Placeholders must never reach the real material.
+    # Placeholders must never reach the real material. Matched as whole values
+    # so a legitimate name containing 示例 is not rejected.
     for name, value in fields.as_form_order():
-        for marker in PLACEHOLDER_MARKERS:
-            if marker in value:
-                issues.append(
-                    FieldIssue(name, f"仍含占位内容「{marker}」，须替换为真实值", "材料完整性")
-                )
-                break
+        stripped = value.strip()
+        if not stripped:
+            continue
+        if stripped in PLACEHOLDER_EXACT or stripped.startswith(PLACEHOLDER_PREFIXES):
+            issues.append(
+                FieldIssue(name, f"仍含占位内容「{stripped}」，须替换为真实值", "材料完整性")
+            )
 
     return issues
 

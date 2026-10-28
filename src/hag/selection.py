@@ -85,22 +85,41 @@ class Selection:
 
     @property
     def rendered_pages(self) -> int:
-        """Pages actually produced, which is what the form must report."""
+        """Pages actually produced, which is what the form must report.
+
+        The front and back segments are concatenated and then re-paginated, so
+        the total is not the sum of the two segments' page counts. A front
+        segment ending 14 lines into its last page leaves room for the first
+        14 lines of the back segment on that same page. Adding the two counts
+        would over-report by one page, and that number goes straight onto the
+        application form.
+        """
         if self.mode is SelectionMode.ALL:
             return self.total_pages
-        return self.front_pages + self.back_pages
+        covered = self.front_end_line + (self.total_lines - self.back_start_line + 1)
+        return (covered + self.lines_per_page - 1) // self.lines_per_page
+
+    @property
+    def rendered_lines(self) -> int:
+        """Material lines that will actually be printed."""
+        if self.mode is SelectionMode.ALL:
+            return self.total_lines
+        return self.front_end_line + (self.total_lines - self.back_start_line + 1)
 
     @property
     def title(self) -> str:
         """Filename-safe description that never misstates the page counts.
 
-        When the split is not exact the true counts are printed instead of the
-        nominal 30+30, so the filename cannot be read as a claim it does not
-        support.
+        Only an exact 30+30 result may be described as such. Anything else
+        states the total actually rendered, because the front and back segment
+        page counts do not add up to the real page count once the segments are
+        concatenated and re-paginated.
         """
         if self.mode is SelectionMode.ALL:
             return f"代码(全部{self.rendered_pages}页)"
-        return f"代码(前{self.front_pages}页+后{self.back_pages}页)"
+        if self.exact and self.front_pages == SEGMENT_PAGES and self.back_pages == SEGMENT_PAGES:
+            return f"代码(前{SEGMENT_PAGES}页+后{SEGMENT_PAGES}页)"
+        return f"代码(共{self.rendered_pages}页)"
 
 
 class SelectionError(Exception):
