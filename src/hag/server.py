@@ -63,6 +63,12 @@ TOOL_DESCRIPTIONS = {
         "Return the layout rules and their authority, so the answer to 'why 50 "
         "lines' or 'why is the page number top right' is traceable."
     ),
+    "review_manual": (
+        "Check a manual outline against the required structure before writing it "
+        "out: the six chapters in order, FAQ and glossary last, a reason and "
+        "evidence for any project-specific chapter, and continuous figure "
+        "numbering. Returns the problems found and the page budget."
+    ),
 }
 
 
@@ -277,6 +283,91 @@ def check_fields(fields: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def review_manual(
+    software_name: str,
+    version: str,
+    chapters: list[dict[str, Any]],
+    total_pages: int,
+) -> dict[str, Any]:
+    """Validate a manual outline and report the page budget.
+
+    A chapter is a dict with ``title`` and ``body``; project-specific chapters
+    additionally carry ``reason`` and ``evidence``, and any chapter may carry a
+    ``figures`` list of ``{"index": 1, "caption": "..."}``.
+    """
+    from .manual import (
+        Chapter,
+        ChapterKind,
+        Figure,
+        Manual,
+        ManualError,
+        chapter_number,
+        plan_pages,
+        validate_structure,
+    )
+
+    manual = Manual(software_name=software_name, version=version)
+    required = {
+        "说明",
+        "功能特点",
+        "系统要求",
+        "各功能页面/模块",
+        "常见问题解答",
+        "术语表",
+    }
+
+    for position, raw in enumerate(chapters, start=1):
+        title = str(raw.get("title", "")).strip()
+        kind = (
+            ChapterKind.REQUIRED if title in required else ChapterKind.PROJECT_SPECIFIC
+        )
+        figures = [
+            Figure(
+                chapter_number=str(position),
+                index=int(fig.get("index", 0)),
+                caption=str(fig.get("caption", "")),
+                image_path=fig.get("image_path"),
+            )
+            for fig in raw.get("figures", []) or []
+        ]
+        manual.chapters.append(
+            Chapter(
+                title=title,
+                body=str(raw.get("body", "")),
+                kind=kind,
+                figures=figures,
+                reason=str(raw.get("reason", "")),
+                evidence=str(raw.get("evidence", "")),
+            )
+        )
+
+    problems = validate_structure(manual)
+
+    budget: dict[str, Any] = {}
+    try:
+        planned = plan_pages(total_pages)
+        budget = {
+            "total_pages": planned.total_pages,
+            "submitted_pages": planned.submitted_pages,
+            "front_pages": planned.front_pages,
+            "back_pages": planned.back_pages,
+            "submits_everything": planned.submits_everything,
+            "note": planned.note,
+        }
+    except ManualError as exc:
+        problems.append(str(exc))
+
+    return {
+        "ok": not problems,
+        "problem_count": len(problems),
+        "problems": problems,
+        "chapters": [
+            f"{chapter_number(i)}、{c.title}" for i, c in enumerate(manual.chapters, 1)
+        ],
+        "budget": budget,
+    }
+
+
 def explain_rules() -> dict[str, Any]:
     """State the layout rules and where each came from."""
     return {
@@ -332,6 +423,7 @@ def create_server() -> Any:
         ("estimate_material", estimate_material),
         ("generate_materials", generate_materials),
         ("check_fields", check_fields),
+        ("review_manual", review_manual),
         ("explain_rules", explain_rules),
     ):
         server.tool(name=name, description=TOOL_DESCRIPTIONS[name])(func)
@@ -352,4 +444,5 @@ __all__ = [
     "generate_materials",
     "inspect_project",
     "main",
+    "review_manual",
 ]

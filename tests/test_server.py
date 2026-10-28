@@ -213,6 +213,60 @@ class TestExplainRules:
         assert "未明文" in rules["comments"]["authority"]
 
 
+class TestReviewManual:
+    def outline(self) -> list[dict[str, object]]:
+        return [
+            {"title": "说明", "body": "x"},
+            {"title": "功能特点", "body": "x"},
+            {"title": "系统要求", "body": "x"},
+            {"title": "各功能页面/模块", "body": "x", "figures": [{"index": 1, "caption": "列表状态"}]},
+            {"title": "常见问题解答", "body": "x"},
+            {"title": "术语表", "body": "x"},
+        ]
+
+    def test_complete_outline_passes(self) -> None:
+        from hag.server import review_manual
+
+        result = review_manual("学生信息系统", "V1.0", self.outline(), 40)
+        assert result["ok"] is True
+        assert result["problems"] == []
+
+    def test_missing_chapter_reported(self) -> None:
+        from hag.server import review_manual
+
+        result = review_manual("S", "V1.0", [{"title": "说明", "body": "x"}], 40)
+        assert result["ok"] is False
+        assert result["problem_count"] > 0
+
+    def test_budget_trimmed_over_sixty(self) -> None:
+        from hag.server import review_manual
+
+        result = review_manual("S", "V1.0", self.outline(), 75)
+        assert result["budget"]["front_pages"] == 30
+        assert result["budget"]["back_pages"] == 30
+        assert result["budget"]["submits_everything"] is False
+
+    def test_budget_whole_under_sixty(self) -> None:
+        from hag.server import review_manual
+
+        result = review_manual("S", "V1.0", self.outline(), 40)
+        assert result["budget"]["submits_everything"] is True
+
+    def test_custom_chapter_needs_reason(self) -> None:
+        from hag.server import review_manual
+
+        outline = self.outline()
+        outline.insert(4, {"title": "指标与口径", "body": "x"})
+        result = review_manual("S", "V1.0", outline, 40)
+        assert any("理由" in p for p in result["problems"])
+
+    def test_chapter_headings_use_chinese_numerals(self) -> None:
+        from hag.server import review_manual
+
+        result = review_manual("S", "V1.0", self.outline(), 40)
+        assert result["chapters"][0].startswith("一、")
+
+
 class TestServerConstruction:
     def test_server_builds(self) -> None:
         pytest.importorskip("mcp")
