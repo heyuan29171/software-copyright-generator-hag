@@ -32,6 +32,7 @@ all = ["hag[pdf,docx,images]"]
 
 [project.scripts]
 hag = "hag.__main__:main"
+hag-gui = "hag.gui:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/hag"]

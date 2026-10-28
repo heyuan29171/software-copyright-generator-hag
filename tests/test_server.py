@@ -175,6 +175,58 @@ class TestGenerate:
         assert (out / "校验报告.md").is_file()
 
 
+class TestFailureReporting:
+    """A failed write must never be reported as success."""
+
+    def test_illegal_filename_characters_rejected(self, tmp_path: Path) -> None:
+        project = make_project(tmp_path / "proj", files=2, lines_each=10)
+        result = generate_materials(
+            str(project), "A/B:C*D?", "V1.0", output_dir=str(tmp_path / "out")
+        )
+        assert result["ok"] is False
+        assert "error" in result
+
+    def test_illegal_name_produces_no_pdf(self, tmp_path: Path) -> None:
+        project = make_project(tmp_path / "proj", files=2, lines_each=10)
+        out = tmp_path / "out"
+        generate_materials(str(project), "Bad/Name", "V1.0", output_dir=str(out))
+        official = out / "正式资料"
+        assert not list(official.glob("*.pdf")) if official.is_dir() else True
+
+    def test_output_path_is_a_file(self, tmp_path: Path) -> None:
+        project = make_project(tmp_path / "proj", files=2, lines_each=10)
+        blocker = tmp_path / "blocker"
+        blocker.write_text("x", encoding="utf-8")
+        result = generate_materials(
+            str(project), "Sys", "V1.0", output_dir=str(blocker)
+        )
+        assert result["ok"] is False
+        assert "not a directory" in result["error"]
+
+    def test_control_character_in_name_rejected(self, tmp_path: Path) -> None:
+        project = make_project(tmp_path / "proj", files=2, lines_each=10)
+        result = generate_materials(
+            str(project), "Sys\x01Name", "V1.0", output_dir=str(tmp_path / "o")
+        )
+        assert result["ok"] is False
+
+    def test_successful_run_really_has_a_pdf(self, tmp_path: Path) -> None:
+        """The counterpart: ok=True must mean the file is on disk."""
+        project = make_project(tmp_path / "proj")
+        out = tmp_path / "out"
+        result = generate_materials(
+            str(project),
+            "学生信息管理系统",
+            "V1.0",
+            output_dir=str(out),
+            fields=valid_field_payload(),
+        )
+        assert result["ok"] is True
+        pdfs = list((out / "正式资料").glob("*.pdf"))
+        assert len(pdfs) == 1
+        assert pdfs[0].stat().st_size > 0
+
+
 class TestCheckFields:
     def test_valid_payload(self) -> None:
         result = check_fields(valid_field_payload())

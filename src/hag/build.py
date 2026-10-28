@@ -37,6 +37,27 @@ from .render_pdf import HeaderSpec
 
 DEFAULT_OUTPUT_DIRNAME = "软件著作权申请资料"
 
+# Characters that cannot appear in a filename on Windows, plus the control
+# range. A software name containing any of these cannot become a filename, so
+# it has to be rejected before work starts rather than failing at write time.
+_ILLEGAL_FILENAME_CHARS = frozenset('<>:"/\\|?*')
+
+
+def _assert_filename_usable(path: Path) -> None:
+    """Reject a software name that cannot legally become a filename."""
+    name = path.name
+    offending = sorted({ch for ch in name if ch in _ILLEGAL_FILENAME_CHARS})
+    if offending:
+        raise PipelineError(
+            "软件全称含有不能在文件名中使用的字符："
+            + " ".join(repr(ch) for ch in offending)
+            + "。请改用不含这些字符的名称，或通过 output_dir 指定输出位置。"
+        )
+    if any(ord(ch) < 32 for ch in name):
+        raise PipelineError("软件全称含有控制字符，无法作为文件名")
+    if name in {".", ".."} or not name.strip():
+        raise PipelineError("软件全称不能为空或仅由空白组成")
+
 
 @dataclass(slots=True)
 class BuildResult:
@@ -72,18 +93,24 @@ def build_materials(
         raise PipelineError(f"project root is not a directory: {root}")
 
     out = Path(output_dir) if output_dir else root / DEFAULT_OUTPUT_DIRNAME
+    if out.exists() and not out.is_dir():
+        raise PipelineError(
+            f"output path exists and is not a directory: {out}"
+        )
     out.mkdir(parents=True, exist_ok=True)
     official = out / "正式资料"
     official.mkdir(exist_ok=True)
 
     header = HeaderSpec(software_name=software_name, version=version)
+    pdf_path = official / f"{software_name}-代码.pdf"
+    _assert_filename_usable(pdf_path)
 
     result: PipelineResult | None = None
     pipeline_error: str | None = None
     try:
         result = run_code_pipeline(
             root,
-            official / f"{software_name}-代码.pdf",
+            pdf_path,
             header,
             include=include,
             exclude=exclude,
@@ -91,6 +118,12 @@ def build_materials(
         )
     except PipelineError as exc:
         pipeline_error = str(exc)
+    except OSError as exc:
+        # Writing the PDF can fail for filesystem reasons that have nothing to
+        # do with the project: a name the OS rejects, a locked file, a full
+        # disk. Reporting success here would tell the user material exists when
+        # it does not.
+        pipeline_error = f"写入文件失败：{exc}"
 
     report = Report()
 
@@ -109,6 +142,22 @@ def build_materials(
         return BuildResult(output_dir=out, report=report, pipeline=None)
 
     files = [result.pdf_path] if result.pdf_path else []
+
+    # A run that was asked to render but produced no file has not succeeded,
+    # however clean the rest of the pipeline looked.
+    if render and (result.pdf_path is None or not Path(result.pdf_path).is_file()):
+        report.add(
+            Check(
+                "I-15",
+                Level.FAIL,
+                "PDF 未生成",
+                "流程报告成功，但输出目录中没有代码材料 PDF",
+                "中国版权保护中心《办理步骤》：材料不齐全的不予受理",
+                "检查输出路径是否可写后重试",
+            )
+        )
+        _write_report(out, report)
+        return BuildResult(output_dir=out, report=report, pipeline=result, files=files)
 
     # Cross-check the artefacts.
     report.extend(

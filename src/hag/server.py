@@ -28,6 +28,7 @@ from .application import (
 from .build import build_materials
 from .discovery import discover, summarize_by_suffix
 from .layout import LINES_PER_PAGE
+from .pipeline import PipelineError
 
 try:  # pragma: no cover - exercised only when the SDK is present
     from mcp.server.mcpserver import MCPServer
@@ -235,8 +236,16 @@ def generate_materials(
             include=include,
             exclude=exclude,
         )
-    except Exception as exc:
+    except PipelineError as exc:
         return {"ok": False, "error": str(exc)}
+    except OSError as exc:
+        return {
+            "ok": False,
+            "error": f"文件系统错误：{exc.strerror or exc}",
+            "hint": "检查输出目录是否可写，以及软件全称是否含有路径非法字符",
+        }
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
     pipeline = built.pipeline
     return {
