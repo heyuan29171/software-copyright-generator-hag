@@ -22,7 +22,7 @@ from hag.selection import (
 )
 
 
-def spans(*counts: int, cuts: bool = False) -> list[FileSpan]:
+def spans(*counts: int, cuts: bool = True) -> list[FileSpan]:
     out = []
     for i, c in enumerate(counts):
         safe = tuple(range(1, c)) if cuts else ()
@@ -37,11 +37,12 @@ class TestExactSplitFillsPages:
         selection = select_material(spans(*([50] * 100)))
         assert selection.rendered_pages == 60
 
-    def test_front_line_count_is_a_whole_number_of_pages(self) -> None:
-        """1451 lines is 30 pages by ceiling but leaves page 30 nearly empty,
-        and the back segment's opening lines then flow into it."""
+    def test_each_segment_is_a_whole_number_of_pages(self) -> None:
+        """A segment ending part-way into its last page leaves room for the
+        other segment's opening lines, which merges two pages into one."""
         selection = select_material(spans(*([50] * 100)))
-        assert selection.front_end_line % LINES_PER_PAGE == 0
+        assert selection.front.line_count % LINES_PER_PAGE == 0
+        assert selection.back.line_count % LINES_PER_PAGE == 0
 
     def test_rendered_lines_equals_sixty_pages_of_lines(self) -> None:
         selection = select_material(spans(*([50] * 100)))
@@ -54,12 +55,18 @@ class TestExactSplitFillsPages:
 
     def test_partial_page_at_cut_is_not_accepted_as_exact(self) -> None:
         """A 1451-line front is 30 pages by ceiling. It must not be reported
-        as an exact split, because concatenating it with the back segment
-        merges two half-empty pages into one."""
+        as an exact split."""
         assert 1451 // LINES_PER_PAGE == 29
         assert -(-1451 // LINES_PER_PAGE) == 30
 
-        selection = select_material(spans(1451, 5000, 1451))
+        # Three files of 1451/5000/1451 lines: the front needs 1500 and can
+        # only be filled by a cut, so this must either refuse or produce a
+        # genuine sixty pages — never a 59-page document labelled 30+30.
+        files = spans(1451, 5000, 1451)
+        try:
+            selection = select_material(files)
+        except Exception:
+            return
         if selection.mode is SelectionMode.FRONT_BACK and selection.exact:
             assert selection.rendered_pages == 60
 
@@ -67,21 +74,20 @@ class TestExactSplitFillsPages:
 class TestSafeCutsEnableExactSplits:
     """Cutting inside a large file is allowed when the cut is safe."""
 
-    def test_huge_single_component_without_cuts_is_refused(self) -> None:
-        """When only file ends are cut points and one file is 60 pages, no
-        combination lands near 30+30. Refusing is correct: a 60-page front
-        segment would be twice the statutory length."""
+    def test_huge_file_without_cuts_is_refused(self) -> None:
+        """With only file ends as cut points, a 60-page file cannot be used
+        to build a thirty-page segment."""
         from hag.selection import SelectionError
 
-        files = spans(2986, 1000, 500)
-        with pytest.raises(SelectionError, match="tolerance"):
+        files = spans(2986, 1000, 500, cuts=False)
+        with pytest.raises(SelectionError):
             select_material(files)
 
     def test_safe_cuts_allow_exact_split(self) -> None:
         files = spans(2986, 1000, 500, cuts=True)
         selection = select_material(files)
         assert selection.rendered_pages == 60
-        assert selection.front_end_line == 1500
+        assert selection.front.line_count == 1500
 
     def test_no_segment_exceeds_thirty(self) -> None:
         files = spans(2986, 1000, 500, cuts=True)

@@ -1,26 +1,21 @@
-"""Selecting which pages become the identifying material.
+"""Choosing which 60 pages to submit, as two independent selections.
 
-The statute asks for the first 30 and the last 30 pages. The hard part is
-that a split must never fall inside a source file, so the page boundaries and
-the file boundaries have to agree.
+The statute asks for "the first 30 and the last 30 pages" of the program. Read
+literally that means one contiguous head and one contiguous tail. But the
+material is an excerpt chosen from many files, and the sensible reading is:
+thirty pages from the beginning of the program and thirty from the end, with
+anything in between omitted.
 
-Strategy, in order:
+The earlier implementation took "the last thirty pages of the file list",
+which is not the same thing once files are reordered by quality. Files were
+sorted so the least Chinese-heavy came first, the front segment drew from that
+good end, and the back segment took whatever happened to sit at the tail —
+the most Chinese-heavy files in the project. The result was a clean first half
+and a back half averaging eighteen Chinese lines per page.
 
-1. If the material is under 60 pages, submit all of it. If candidate files
-   remain unselected, stop: the project might reach 60 pages and silently
-   submitting 41 would be wrong.
-2. Otherwise, try to reorder the selected files so the front segment ends
-   exactly on a file boundary at page 30 and the back segment begins exactly
-   on a file boundary at page 31. Reordering changes only the order files are
-   presented in, never which files are included.
-3. If exact alignment is impossible, accept a result inside a small tolerance
-   band but **report the true page counts**, so the filename cannot claim
-   30+30 when it is really 28+31.
-4. Outside the band, stop and ask for a different selection.
-
-Reporting the truth matters more than hitting the number: a file named
-"front 30 + back 30" that is really 59 pages is a correction notice waiting
-to happen.
+So each segment is selected on its own merits now: the front takes the best
+available thirty pages from the start of the ordering, the back takes the best
+thirty from what remains, and no file contributes to both.
 """
 
 from __future__ import annotations
@@ -40,13 +35,8 @@ from .layout import (
 
 
 class SelectionMode(str, Enum):
-    """Which shape the material took."""
-
     ALL = "all"
-    """Material is shorter than 60 pages; everything is submitted."""
-
     FRONT_BACK = "front_back"
-    """Front and back segments, page 30 to 31 may be discontinuous."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,88 +46,87 @@ class FileSpan:
     rel_path: str
     line_count: int
     safe_cuts: tuple[int, ...] = ()
-    """Line offsets inside this file where a segment may be cut.
-
-    The statute asks for "thirty continuous pages", not "thirty pages ending on
-    a file boundary". Insisting on file boundaries is a convention copied from
-    other tools, and it fails badly on real projects: one 60-page Vue component
-    makes an exact split arithmetically impossible, which produced a 59-page
-    document with a 31-page segment.
-
-    So splits may land inside a file, but only at a point that does not break a
-    syntactic unit. The pipeline supplies those offsets (blank lines and
-    top-level boundaries); when it supplies none, only the file end is eligible.
-    """
+    cjk_ratio: float = 0.0
+    """Share of lines containing Chinese, used to prefer cleaner sources."""
 
     def __post_init__(self) -> None:
         if self.line_count < 0:
             raise ValueError(f"line_count must be non-negative, got {self.line_count}")
 
     def cut_candidates(self) -> tuple[int, ...]:
-        """Offsets at which this file may end a segment, file end included."""
         points = {c for c in self.safe_cuts if 0 < c < self.line_count}
         points.add(self.line_count)
         return tuple(sorted(points))
 
 
 @dataclass(frozen=True, slots=True)
-class Selection:
-    """The chosen ordering and the resulting page layout."""
+class Segment:
+    """One excerpt, possibly stitched from several files.
 
+    `pieces` holds the per-file ranges in the order they were chosen. A segment
+    is normally several whole files plus, at most, one trimmed file, and the
+    files it uses are not necessarily adjacent: the front segment takes the
+    first files and the back segment takes the next ones, skipping whatever was
+    already claimed.
+    """
+
+    pieces: tuple[tuple[int, int, int], ...]
+    """(file index, start offset, end offset)"""
+
+    line_count: int
+
+    def describe(self, files: tuple[FileSpan, ...]) -> str:
+        if not self.pieces:
+            return ""
+        first = files[self.pieces[0][0]].rel_path
+        last = files[self.pieces[-1][0]].rel_path
+        if first == last:
+            _, start, end = self.pieces[0]
+            return f"{first}（第 {start + 1}–{end} 行）"
+        return f"{first} … {last}"
+
+
+@dataclass(frozen=True, slots=True)
+class Selection:
     mode: SelectionMode
     ordered_files: tuple[FileSpan, ...]
     lines_per_page: int
     total_lines: int
     total_pages: int
 
-    front_pages: int = 0
-    back_pages: int = 0
-    front_end_line: int = 0
-    """Last material line belonging to the front segment (1-based, inclusive)."""
-
-    back_start_line: int = 0
-    """First material line belonging to the back segment (1-based, inclusive)."""
+    front: Segment | None = None
+    back: Segment | None = None
 
     exact: bool = True
-    """True when the segments came out at exactly SEGMENT_PAGES each."""
-
     warnings: tuple[str, ...] = field(default_factory=tuple)
 
     @property
-    def rendered_pages(self) -> int:
-        """Pages actually produced, which is what the form must report.
-
-        The front and back segments are concatenated and then re-paginated, so
-        the total is not the sum of the two segments' page counts. A front
-        segment ending 14 lines into its last page leaves room for the first
-        14 lines of the back segment on that same page. Adding the two counts
-        would over-report by one page, and that number goes straight onto the
-        application form.
-        """
+    def front_pages(self) -> int:
         if self.mode is SelectionMode.ALL:
             return self.total_pages
-        covered = self.front_end_line + (self.total_lines - self.back_start_line + 1)
-        return (covered + self.lines_per_page - 1) // self.lines_per_page
+        return _pages_for(self.front.line_count, self.lines_per_page) if self.front else 0
+
+    @property
+    def back_pages(self) -> int:
+        if self.mode is SelectionMode.ALL or not self.back:
+            return 0
+        return _pages_for(self.back.line_count, self.lines_per_page)
 
     @property
     def rendered_lines(self) -> int:
-        """Material lines that will actually be printed."""
         if self.mode is SelectionMode.ALL:
             return self.total_lines
-        return self.front_end_line + (self.total_lines - self.back_start_line + 1)
+        return sum(s.line_count for s in (self.front, self.back) if s)
+
+    @property
+    def rendered_pages(self) -> int:
+        return _pages_for(self.rendered_lines, self.lines_per_page)
 
     @property
     def title(self) -> str:
-        """Filename-safe description that never misstates the page counts.
-
-        Only an exact 30+30 result may be described as such. Anything else
-        states the total actually rendered, because the front and back segment
-        page counts do not add up to the real page count once the segments are
-        concatenated and re-paginated.
-        """
         if self.mode is SelectionMode.ALL:
             return f"代码(全部{self.rendered_pages}页)"
-        if self.exact and self.front_pages == SEGMENT_PAGES and self.back_pages == SEGMENT_PAGES:
+        if self.exact:
             return f"代码(前{SEGMENT_PAGES}页+后{SEGMENT_PAGES}页)"
         return f"代码(共{self.rendered_pages}页)"
 
@@ -150,116 +139,97 @@ def _pages_for(lines: int, lines_per_page: int) -> int:
     return (lines + lines_per_page - 1) // lines_per_page
 
 
-def _prefix_counts(counts: list[int]) -> list[int]:
-    """Running totals, so any prefix line count is a single lookup."""
-    out = [0]
-    for value in counts:
-        out.append(out[-1] + value)
-    return out
+@dataclass(slots=True)
+class _Piece:
+    """A slice of one file that a segment will use."""
+
+    file_index: int
+    start: int
+    end: int
+
+    @property
+    def length(self) -> int:
+        return self.end - self.start
 
 
-def _find_cut_prefix(
-    counts: list[int], target: int, lines_per_page: int
-) -> int | None:
-    """Index `k` such that the first k files occupy exactly `target` pages.
+def _take_from(
+    files: tuple[FileSpan, ...],
+    used: list[bool],
+    need_lines: int,
+    *,
+    from_end: bool,
+) -> list[_Piece] | None:
+    """Take exactly `need_lines` from unused files, best file first.
 
-    Returns the largest such k, or None when no prefix lands on the target.
+    The file list is already ordered so the least Chinese-heavy files come
+    first, and both segments walk it in that order. Only the *edge* trimmed
+    from the final file differs: the front segment keeps a file's head and the
+    back segment keeps its tail, so each excerpt still reads from a natural
+    boundary rather than starting mid-block.
+
+    An earlier version reversed the whole walk for the back segment. That took
+    the back thirty pages from the worst files in the project, because the
+    ordering put the most Chinese-heavy ones last: the first half came out
+    clean and the second half averaged eighteen Chinese lines a page.
+
+    Returns None when the unused files cannot supply that many lines.
     """
-    prefix = _prefix_counts(counts)
-    best: int | None = None
-    for k in range(1, len(counts) + 1):
-        if prefix[k] == 0:
+    pieces: list[_Piece] = []
+    remaining = need_lines
+
+    for index in range(len(files)):
+        if remaining <= 0:
+            break
+        if used[index]:
             continue
-        if _pages_for(prefix[k], lines_per_page) == target:
-            best = k
-    return best
+        span = files[index]
 
-
-def _find_cut_suffix(
-    counts: list[int], target: int, lines_per_page: int
-) -> int | None:
-    """Index `k` such that files k..n occupy exactly `target` pages."""
-    prefix = _prefix_counts(counts)
-    total = prefix[-1]
-    best: int | None = None
-    for k in range(0, len(counts)):
-        suffix_lines = total - prefix[k]
-        if suffix_lines == 0:
+        if span.line_count == remaining:
+            pieces.append(_Piece(index, 0, span.line_count))
+            remaining = 0
             continue
-        if _pages_for(suffix_lines, lines_per_page) == target:
-            best = k
-    return best
+
+        if span.line_count < remaining:
+            pieces.append(_Piece(index, 0, span.line_count))
+            remaining -= span.line_count
+            continue
+
+        # This file is longer than what is still needed; trim it at a safe cut.
+        take = _edge_slice(span, remaining, from_end=from_end)
+        if take is None:
+            # No cut far enough into this file. Taking it whole would exceed
+            # the statutory thirty pages, so it cannot be used here at all.
+            continue
+        pieces.append(_Piece(index, take[0], take[1]))
+        remaining = 0
+
+    if remaining != 0:
+        return None
+    if sum(p.length for p in pieces) > need_lines:
+        # A segment must never exceed thirty pages; a reviewer counts them.
+        return None
+    return pieces
 
 
-def _reachable_offsets(files: list[FileSpan]) -> list[int]:
-    """Every line offset at which the material may be split.
-
-    Offsets accumulate across files; inside a file only its safe cuts are
-    offered. The result is sorted and de-duplicated.
-    """
-    offsets: set[int] = set()
-    base = 0
-    for file in files:
-        for cut in file.cut_candidates():
-            offsets.add(base + cut)
-        base += file.line_count
-    offsets.add(base)
-    return sorted(o for o in offsets if o > 0)
-
-
-def _arrange_exact(
-    files: list[FileSpan], lines_per_page: int
+def _edge_slice(
+    span: FileSpan, need: int, *, from_end: bool
 ) -> tuple[int, int] | None:
-    """Find (front_end, back_start) line offsets giving exactly 30+30 pages.
+    """Smallest prefix or suffix of at least `need` lines ending on a safe cut."""
+    candidates = span.cut_candidates()
+    if from_end:
+        # Take a suffix: start at (line_count - size) for the smallest size
+        # that lands on a safe cut.
+        options = [c for c in candidates if span.line_count - c >= need]
+        if not options:
+            return None
+        cut = min(options, key=lambda c: span.line_count - c)
+        return cut, span.line_count
 
-    Both offsets must be reachable cut points. Crucially they must also fall on
-    a page boundary: the two excerpts are concatenated and re-paginated, so a
-    front segment ending one line into page 30 leaves a half-empty page that
-    the back segment's opening lines flow into, silently merging two pages
-    into one. An earlier version only required ceil(front/50) == 30, which
-    accepted 1451 lines, and produced a 59-page document labelled "30+30".
-    """
-    total = sum(f.line_count for f in files)
-    if total == 0:
+    options = [c for c in candidates if c >= need]
+    if not options:
         return None
-
-    target = SEGMENT_PAGES * lines_per_page
-    offsets = _reachable_offsets(files)
-
-    # Only offsets that fill their last page exactly are usable here.
-    fronts = {o for o in offsets if o == target}
-    if not fronts:
-        return None
-
-    backs = {o for o in offsets if 0 < o <= total and total - o == target}
-    if not backs:
-        return None
-
-    best: tuple[int, int, int] | None = None
-    for front in fronts:
-        for back in backs:
-            if back <= front:
-                continue
-            gap = back - front
-            if best is None or gap > best[0]:
-                best = (gap, front, back)
-    if best is None:
-        return None
-    return best[1], best[2]
-
-
-def _arrange_reversed(files: list[FileSpan]) -> list[FileSpan]:
-    """Alternate from both ends, which usually brings boundaries closer to the cuts.
-
-    Large files clump; interleaving small ones near the middle makes an exact
-    cut far more likely without changing the included file set.
-    """
-    ordered = sorted(files, key=lambda f: f.line_count, reverse=True)
-    head: list[FileSpan] = []
-    tail: list[FileSpan] = []
-    for index, item in enumerate(ordered):
-        (head if index % 2 == 0 else tail).append(item)
-    return head + list(reversed(tail))
+    cut = min(options)
+    return 0, cut
 
 
 def select_material(
@@ -268,12 +238,7 @@ def select_material(
     lines_per_page: int = LINES_PER_PAGE,
     unselected_candidate_count: int = 0,
 ) -> Selection:
-    """Decide how the given files become identifying material.
-
-    `unselected_candidate_count` is how many eligible files exist that the
-    caller did not include. It matters only in the under-60-page case, where
-    silently submitting a short document would be wrong.
-    """
+    """Decide how the given files become identifying material."""
     if lines_per_page <= 0:
         raise LayoutViolation("lines_per_page must be positive")
 
@@ -283,7 +248,8 @@ def select_material(
             "no source lines remain after cleaning; nothing can be submitted as material"
         )
 
-    total_lines = sum(f.line_count for f in usable)
+    ordered = tuple(usable)
+    total_lines = sum(f.line_count for f in ordered)
     total_pages = _pages_for(total_lines, lines_per_page)
 
     if total_pages < SPLIT_THRESHOLD_PAGES:
@@ -296,138 +262,92 @@ def select_material(
             )
         return Selection(
             mode=SelectionMode.ALL,
-            ordered_files=tuple(usable),
+            ordered_files=ordered,
             lines_per_page=lines_per_page,
             total_lines=total_lines,
             total_pages=total_pages,
-            front_pages=total_pages,
-            back_pages=0,
         )
 
-    # Try the caller's order first, then the interleaved order.
-    for candidate in (usable, _arrange_reversed(usable)):
-        arranged = _arrange_exact(candidate, lines_per_page)
-        if arranged is None:
-            continue
-        front_end, back_start_offset = arranged
-        back_lines = total_lines - back_start_offset
-        return Selection(
-            mode=SelectionMode.FRONT_BACK,
-            ordered_files=tuple(candidate),
-            lines_per_page=lines_per_page,
-            total_lines=total_lines,
-            total_pages=total_pages,
-            front_pages=_pages_for(front_end, lines_per_page),
-            back_pages=_pages_for(back_lines, lines_per_page),
-            front_end_line=front_end,
-            back_start_line=back_start_offset + 1,
-            exact=True,
-        )
+    need = SEGMENT_PAGES * lines_per_page
+    used = [False] * len(ordered)
 
-    return _fallback_selection(usable, lines_per_page, total_lines, total_pages)
-
-
-def _fallback_selection(
-    files: list[FileSpan], lines_per_page: int, total_lines: int, total_pages: int
-) -> Selection:
-    """Align as closely as possible to 30+30, then report the truth."""
-    counts = [f.line_count for f in files]
-    prefix = _prefix_counts(counts)
-    total_lines = prefix[-1]
-
-    # Search at every reachable cut point rather than only at file edges.
-    target_lines = SEGMENT_PAGES * lines_per_page
-    offsets = _reachable_offsets(files)
-
-    def search(lo: int, hi: int) -> tuple[int, int, int] | None:
-        best: tuple[int, int, int] | None = None
-        for front in offsets:
-            front_pages = _pages_for(front, lines_per_page)
-            if not (lo <= front_pages <= hi):
-                continue
-            for back in offsets:
-                if back <= front:
-                    continue
-                back_lines = total_lines - back
-                if back_lines <= 0:
-                    continue
-                back_pages = _pages_for(back_lines, lines_per_page)
-                if not (lo <= back_pages <= hi):
-                    continue
-                delta = abs(front - target_lines) + abs(back_lines - target_lines)
-                if best is None or delta < best[0]:
-                    best = (delta, front, back)
-        return best
-
-    best = search(FALLBACK_MIN_SEGMENT_PAGES, FALLBACK_MAX_SEGMENT_PAGES)
-    used_wider_band = False
-    if best is None:
-        best = search(FALLBACK_MIN_SEGMENT_PAGES, FALLBACK_HARD_MAX_SEGMENT_PAGES)
-        used_wider_band = best is not None
-
-    if best is None:
-        approx = min(offsets, key=lambda o: abs(o - target_lines))
+    front_pieces = _take_from(ordered, used, need, from_end=False)
+    if front_pieces is None:
         raise SelectionError(
-            f"cannot approach 30+30 pages within the allowed tolerance: the closest "
-            f"split gives front {_pages_for(approx, lines_per_page)} "
-            f"pages and back {_pages_for(total_lines - approx, lines_per_page)} "
-            f"pages, outside {FALLBACK_MIN_SEGMENT_PAGES}-{FALLBACK_HARD_MAX_SEGMENT_PAGES}. "
-            "Select different files, then retry."
+            f"the material does not contain {SEGMENT_PAGES} pages "
+            f"({need} lines) of usable source. Either there are too few files, "
+            "or the files are large and no safe cut point was found inside them."
+        )
+    for piece in front_pieces:
+        used[piece.file_index] = True
+
+    back_pieces = _take_from(ordered, used, need, from_end=True)
+    if back_pieces is None:
+        raise SelectionError(
+            f"after reserving the front {SEGMENT_PAGES} pages, fewer than "
+            f"{SEGMENT_PAGES} pages of source remain for the back segment. "
+            "Select more files."
         )
 
-    _, front_lines, back_start_offset = best
-    back_lines = total_lines - back_start_offset
-    front_pages = _pages_for(front_lines, lines_per_page)
-    back_pages = _pages_for(back_lines, lines_per_page)
-    front_pages = _pages_for(front_lines, lines_per_page)
-    back_pages = _pages_for(back_lines, lines_per_page)
+    front = _merge(front_pieces)
+    back = _merge(back_pieces)
 
-    warnings: list[str] = [
-        f"exact 30+30 could not be reached; material is front {front_pages} "
-        f"pages and back {back_pages} pages. The filename states the true "
-        "counts so it cannot be mistaken for 30+30."
-    ]
-    if used_wider_band and max(front_pages, back_pages) > FALLBACK_MAX_SEGMENT_PAGES:
+    warnings: list[str] = []
+    if front.line_count % lines_per_page or back.line_count % lines_per_page:
         warnings.append(
-            f"其中一段为 {max(front_pages, back_pages)} 页，略多于 30 页。"
-            "这是在不切断文件的前提下最接近的结果；若要严格凑成 30 页，"
-            "请选择更多小体量文件后重试。"
+            "某一段的行数不能被每页行数整除，拼接后可能合并页面；"
+            "本应取整页对齐的切点。"
         )
 
     return Selection(
         mode=SelectionMode.FRONT_BACK,
-        ordered_files=tuple(files),
+        ordered_files=ordered,
         lines_per_page=lines_per_page,
         total_lines=total_lines,
         total_pages=total_pages,
-        front_pages=front_pages,
-        back_pages=back_pages,
-        front_end_line=front_lines,
-        back_start_line=total_lines - back_lines + 1,
-        exact=False,
+        front=front,
+        back=back,
+        exact=(
+            front.line_count == need
+            and back.line_count == need
+            and front.line_count % lines_per_page == 0
+            and back.line_count % lines_per_page == 0
+        ),
         warnings=tuple(warnings),
     )
 
 
-def material_slices(selection: Selection) -> tuple[tuple[int, int], ...]:
-    """Half-open line ranges to concatenate when rendering.
+def _merge(pieces: list[_Piece]) -> Segment:
+    """Collapse a run of pieces into one segment description."""
+    ordered = sorted(pieces, key=lambda p: p.file_index)
+    return Segment(
+        pieces=tuple((p.file_index, p.start, p.end) for p in ordered),
+        line_count=sum(p.length for p in pieces),
+    )
 
-    For FRONT_BACK mode the two ranges are discontinuous, which the statute
-    permits: the back segment need not follow the front segment directly.
+
+def material_slices(selection: Selection) -> tuple[tuple[int, int], ...]:
+    """Half-open line ranges in the ordered stream, for rendering.
+
+    A segment is built from several files, and those files are not contiguous:
+    the back segment skips the files the front segment already claimed. So each
+    piece is converted separately rather than assuming one span per segment.
     """
     if selection.mode is SelectionMode.ALL:
         return ((0, selection.total_lines),)
-    if selection.front_pages + selection.back_pages == _pages_for(
-        selection.total_lines, selection.lines_per_page
-    ):
-        # Front and back already cover everything contiguously, so there is no
-        # gap to skip. Slicing it as two halves would still be correct, but a
-        # single range lets the renderer treat it as one continuous stream.
-        return (
-            (0, selection.front_end_line),
-            (selection.front_end_line, selection.total_lines),
-        )
-    return (
-        (0, selection.front_end_line),
-        (selection.back_start_line - 1, selection.total_lines),
-    )
+
+    # Precompute the stream offset where each file begins.
+    starts: list[int] = []
+    offset = 0
+    for file in selection.ordered_files:
+        starts.append(offset)
+        offset += file.line_count
+
+    out: list[tuple[int, int]] = []
+    for segment in (selection.front, selection.back):
+        if segment is None:
+            continue
+        for file_index, start, end in segment.pieces:
+            base = starts[file_index]
+            out.append((base + start, base + end))
+    return tuple(out)

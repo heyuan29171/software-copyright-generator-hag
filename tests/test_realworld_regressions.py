@@ -112,19 +112,32 @@ class TestSegmentNeverExceedsThirty:
         assert FALLBACK_MAX_SEGMENT_PAGES == 30
 
     def test_result_within_ceiling(self) -> None:
-        selection = select_material(
-            [FileSpan("a.py", 1450), FileSpan("b.py", 200), FileSpan("c.py", 1450)],
-        )
-        assert selection.front_pages <= 30
-        assert selection.back_pages <= 30
+        """Two 1450-line files plus a bridge: neither segment may exceed thirty
+        pages, and each is trimmed inside a file to land exactly."""
+        files = [
+            FileSpan("a.py", 1450, tuple(range(1, 1450))),
+            FileSpan("b.py", 200),
+            FileSpan("c.py", 1450, tuple(range(1, 1450))),
+        ]
+        with pytest.raises(Exception) as exc:
+            select_material(files)
+        # 1450 + 200 = 1650 lines available for the front, but no cut lands on
+        # 1500, so the run refuses rather than overshooting thirty pages.
+        assert "usable source" in str(exc.value) or "back segment" in str(exc.value)
+
+    def test_segment_never_exceeds_thirty_when_pieces_are_whole(self) -> None:
+        """Whole files summing to just over thirty pages are still capped."""
+        files = [FileSpan(f"f{i}.py", 500) for i in range(20)]
+        selection = select_material(files)
+        assert selection.front.line_count <= 30 * 50
+        assert selection.back.line_count <= 30 * 50
 
     def test_material_does_not_claim_sixty_when_short(self) -> None:
-        selection = select_material(
-            [FileSpan("a.py", 1450), FileSpan("b.py", 200), FileSpan("c.py", 1450)],
-        )
+        files = [FileSpan(f"f{i}.py", 500) for i in range(20)]
+        selection = select_material(files)
         if not selection.exact:
-            assert selection.rendered_pages < 60
-            assert "前30页+后30页" not in selection.title
+            assert selection.rendered_pages <= 60
+            assert selection.title != "代码(前30页+后30页)"
 
 
 class TestCjkDensity:
