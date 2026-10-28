@@ -46,20 +46,22 @@ class CodeLayout:
 
     page_width_cm: Decimal = Decimal("21.0")
     page_height_cm: Decimal = Decimal("29.7")
-    # Values read from the .docx that circulates as a template, not from a
-    # published specification: the Centre does not publish one for R11. Top
-    # 2cm, bottom 1cm, left and right 2cm. The bottom margin is small because
-    # the page number sits in the header.
+    # Margins: 2.0cm top and 1.0cm bottom. The small bottom margin is what
+    # makes fifty lines at 15pt fit; the page number lives in the header, so
+    # the foot of the page does not need the white space.
     margin_top_cm: Decimal = Decimal("2.0")
     margin_bottom_cm: Decimal = Decimal("1.0")
     margin_left_cm: Decimal = Decimal("2.0")
     margin_right_cm: Decimal = Decimal("2.0")
-    # Additional left/right indent applied to every paragraph (1247 twips).
-    body_indent_cm: Decimal = Decimal("2.2")
+    # No paragraph indent. Only one third-party document used an indent, while
+    # four other implementations do not, and the material is submitted as a
+    # PDF rather than printed and bound, so an indent buys nothing and only
+    # narrows the body from 481.9pt to 357.2pt, forcing extra wrapping.
+    body_indent_cm: Decimal = Decimal("0")
     header_distance_cm: Decimal = Decimal("1.27")
-    # 10pt (五号) with a fixed 15pt line. Those two numbers, combined with a
-    # 756.85pt body height, are what make exactly fifty lines fit and a
-    # fifty-first not.
+    # 10pt with a fixed 15pt line: 50 lines occupy 750pt of a 756.85pt body.
+    # 12pt/18pt cannot fit fifty lines at all; line-equals-font leaves a third
+    # of the page unused.
     body_font_size_pt: Decimal = Decimal("10.0")
     body_line_pt: Decimal = Decimal("15.0")
     header_font_size_pt: Decimal = Decimal("9.0")

@@ -183,14 +183,17 @@ class TestTemplateGeometry:
 
         assert CODE_LAYOUT.margin_bottom_cm == Decimal("1.0")
 
-    def test_paragraph_indent_is_two_point_two_cm(self) -> None:
+    def test_no_paragraph_indent(self) -> None:
+        """Four of five implementations use no indent, and the material is a
+        PDF rather than a bound printout, so an indent only forces extra
+        wrapping without buying anything."""
         from decimal import Decimal
 
-        assert CODE_LAYOUT.body_indent_cm == Decimal("2.2")
+        assert CODE_LAYOUT.body_indent_cm == Decimal("0")
 
-    def test_body_width_matches_the_document(self) -> None:
-        """12.6cm of usable width, matching the measured 357.20pt."""
-        assert float(CODE_LAYOUT.body_width_pt) == pytest.approx(357.2, abs=0.2)
+    def test_body_width_is_full_text_area(self) -> None:
+        """481.9pt: 21cm minus 2cm margins on each side, no indent."""
+        assert float(CODE_LAYOUT.body_width_pt) == pytest.approx(481.9, abs=0.2)
 
     def test_fifty_lines_fit_and_fifty_one_does_not(self) -> None:
         """The template's numbers land on exactly fifty lines, not by rounding."""

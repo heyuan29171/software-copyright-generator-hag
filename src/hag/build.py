@@ -32,7 +32,8 @@ from .audit import (
     check_version_consistency,
 )
 from .application import REQUIRED_FIELDS
-from .layout import MAX_CJK_LINES_PER_PAGE
+from .layout import CODE_LAYOUT, MANUAL_MIN_LINES_PER_PAGE, MAX_CJK_LINES_PER_PAGE
+from .official import verify_official
 from .pipeline import PipelineError, PipelineResult, run_code_pipeline
 from .render_pdf import HeaderSpec
 
@@ -204,6 +205,47 @@ def build_materials(
             _comment_residue(result), result.cleaned.skipped_partial
         )
     )
+
+    # Every rule the authorities actually publish, checked one by one. This is
+    # kept separate from the design checks so that a failure here means a real
+    # violation rather than a difference of opinion about layout.
+    official_findings = verify_official(
+        page_width_cm=float(CODE_LAYOUT.page_width_cm),
+        page_height_cm=float(CODE_LAYOUT.page_height_cm),
+        orientation=CODE_LAYOUT.orientation,
+        lines_per_page=result.selection.lines_per_page,
+        manual_min_lines=MANUAL_MIN_LINES_PER_PAGE,
+        header_text=header.left,
+        software_name=software_name,
+        version=version,
+        applied_version=form_version,
+        rendered_pages=result.rendered_pages,
+        front_pages=result.selection.front_pages,
+        back_pages=result.selection.back_pages,
+        submits_everything=result.selection.mode.value == "all",
+        page_number_position="top-right",
+        output_format="pdf" if result.pdf_path else "none",
+        short_name=fields.short_name if fields else "",
+        published=(
+            fields.publication_status.value == "已发表" if fields else False
+        ),
+        first_publication_date=fields.first_publication_date if fields else "",
+        first_publication_place=fields.first_publication_place if fields else "",
+        owner_category=fields.owner_category if fields else "法人",
+    )
+    for finding in official_findings:
+        if finding.ok:
+            continue
+        report.add(
+            Check(
+                f"OFFICIAL-{finding.key}",
+                Level.FAIL,
+                f"未满足官方要求：{finding.key}",
+                finding.detail,
+                finding.source,
+                "按官方要求修正后重新生成",
+            )
+        )
 
     if fields is not None:
         merged = _merge_fields(fields, software_name, version, result.rendered_pages)

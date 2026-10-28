@@ -43,9 +43,9 @@ class TestPageGeometry:
     def test_body_area(self) -> None:
         # Height: 29.7 - 2.0 - 1.0 = 26.7cm. The small bottom margin is what
         # makes fifty lines fit.
-        # Width: 21 - 2.0 - 2.0 margins - 2 x 2.2 indent = 12.6cm.
+        # Width: 21 - 2.0 - 2.0 = 17cm, with no paragraph indent.
         assert float(CODE_LAYOUT.body_height_pt) == pytest.approx(756.85, abs=0.1)
-        assert float(CODE_LAYOUT.body_width_pt) == pytest.approx(357.2, abs=0.2)
+        assert float(CODE_LAYOUT.body_width_pt) == pytest.approx(481.9, abs=0.2)
 
 
 class TestLineCount:
