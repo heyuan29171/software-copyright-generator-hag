@@ -46,16 +46,21 @@ class CodeLayout:
 
     page_width_cm: Decimal = Decimal("21.0")
     page_height_cm: Decimal = Decimal("29.7")
-    # The published template uses 2cm top and 1cm bottom. The bottom margin is
-    # smaller than the top because the page number sits in the header, not the
-    # footer, which leaves more room for the fifty lines.
+    # Values read from the .docx that circulates as a template, not from a
+    # published specification: the Centre does not publish one for R11. Top
+    # 2cm, bottom 1cm, left and right 2cm. The bottom margin is small because
+    # the page number sits in the header.
     margin_top_cm: Decimal = Decimal("2.0")
     margin_bottom_cm: Decimal = Decimal("1.0")
     margin_left_cm: Decimal = Decimal("2.0")
     margin_right_cm: Decimal = Decimal("2.0")
+    # Additional left/right indent applied to every paragraph (1247 twips).
+    body_indent_cm: Decimal = Decimal("2.2")
     header_distance_cm: Decimal = Decimal("1.27")
-    # SimSun at 10.5pt (小四/五号 in the template) with a fixed 15pt line.
-    body_font_size_pt: Decimal = Decimal("10.5")
+    # 10pt (五号) with a fixed 15pt line. Those two numbers, combined with a
+    # 756.85pt body height, are what make exactly fifty lines fit and a
+    # fifty-first not.
+    body_font_size_pt: Decimal = Decimal("10.0")
     body_line_pt: Decimal = Decimal("15.0")
     header_font_size_pt: Decimal = Decimal("9.0")
     header_line_pt: Decimal = Decimal("12.0")
@@ -72,8 +77,12 @@ class CodeLayout:
 
     @property
     def body_width_pt(self) -> Decimal:
-        return self.page_width_pt - self._cm_to_pt(self.margin_left_cm) - self._cm_to_pt(
-            self.margin_right_cm
+        """Width available to body text, after margins and paragraph indent."""
+        return (
+            self.page_width_pt
+            - self._cm_to_pt(self.margin_left_cm)
+            - self._cm_to_pt(self.margin_right_cm)
+            - 2 * self._cm_to_pt(self.body_indent_cm)
         )
 
     @property

@@ -161,12 +161,17 @@ class TestCjkDensity:
 
 
 class TestTemplateGeometry:
-    """The template's own numbers are what make fifty lines fit."""
+    """Values measured from the .docx that circulates as a template.
 
-    def test_font_is_ten_and_a_half(self) -> None:
+    That document is not an official publication: the Centre does not publish
+    an R11 template. The numbers are recorded because they are self-consistent
+    and land on exactly fifty lines, not because an authority endorses them.
+    """
+
+    def test_font_is_ten_point(self) -> None:
         from decimal import Decimal
 
-        assert CODE_LAYOUT.body_font_size_pt == Decimal("10.5")
+        assert CODE_LAYOUT.body_font_size_pt == Decimal("10.0")
 
     def test_line_height_is_fifteen(self) -> None:
         from decimal import Decimal
@@ -177,6 +182,22 @@ class TestTemplateGeometry:
         from decimal import Decimal
 
         assert CODE_LAYOUT.margin_bottom_cm == Decimal("1.0")
+
+    def test_paragraph_indent_is_two_point_two_cm(self) -> None:
+        from decimal import Decimal
+
+        assert CODE_LAYOUT.body_indent_cm == Decimal("2.2")
+
+    def test_body_width_matches_the_document(self) -> None:
+        """12.6cm of usable width, matching the measured 357.20pt."""
+        assert float(CODE_LAYOUT.body_width_pt) == pytest.approx(357.2, abs=0.2)
+
+    def test_fifty_lines_fit_and_fifty_one_does_not(self) -> None:
+        """The template's numbers land on exactly fifty lines, not by rounding."""
+        fits = 50 * CODE_LAYOUT.body_line_pt <= CODE_LAYOUT.body_height_pt
+        overflowing = 51 * CODE_LAYOUT.body_line_pt <= CODE_LAYOUT.body_height_pt
+        assert fits
+        assert not overflowing
 
     def test_fifty_lines_fit_within_seven_points(self) -> None:
         slack = CODE_LAYOUT.body_height_pt - 50 * CODE_LAYOUT.body_line_pt

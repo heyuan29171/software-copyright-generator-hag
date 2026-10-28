@@ -118,15 +118,26 @@ def cm_to_pt(value: Decimal) -> Decimal:
 
 
 def _font_runs(
-    text: str, fonts: FontPair
+    text: str, fonts: FontPair, *, prefer_cjk_body: bool = False
 ) -> list[tuple[str, str]]:
-    """Split text into runs of (font_key, chunk) for mixed-script lines."""
+    """Split text into runs of (font_key, chunk) for mixed-script lines.
+
+    The published template sets body text in SimSun, which covers both Latin
+    and CJK, so `prefer_cjk_body` draws everything in one font and no run
+    splitting is needed. The monospace font is kept as a fallback for the
+    characters SimSun lacks.
+    """
+    if prefer_cjk_body:
+        if all(fonts.cjk.has(char) for char in text):
+            return [("cjk", text)]
+        # Mixed coverage: fall through to per-character splitting.
+
     runs: list[tuple[str, str]] = []
     current_key = ""
     current: list[str] = []
 
     for char in text:
-        key = "mono" if fonts.mono.has(char) else "cjk"
+        key = "cjk" if fonts.cjk.has(char) else "mono"
         if key != current_key and current:
             runs.append((current_key, "".join(current)))
             current = []
@@ -203,6 +214,9 @@ def render_code_pdf(
     margin_left = cm_to_pt(layout.margin_left_cm)
     margin_top = cm_to_pt(layout.margin_top_cm)
     body_width = layout.body_width_pt
+    # Body paragraphs are indented from the margin in the reference document;
+    # the header is not, which is why the page number sits on the right edge.
+    text_left = margin_left + cm_to_pt(layout.body_indent_cm)
     header_distance = cm_to_pt(layout.header_distance_cm)
 
     line_pt = layout.body_line_pt
@@ -210,31 +224,34 @@ def render_code_pdf(
     for page_index, page_lines in enumerate(pages, start=1):
         pdf.add_page()
 
-        # Header: software name + version on the left, page number at the top right.
-        pdf.set_font("cjk", "", _pt(layout.header_font_size_pt))
-        header_y = header_distance
-        for key, chunk in _font_runs(header.left, fonts):
-            pdf.set_font("mono" if key == "mono" else "cjk", "", _pt(layout.header_font_size_pt))
-            pdf.set_xy(_pt(margin_left) if not pdf.get_x() else pdf.get_x(), _pt(header_y))
+        # Header: software name and version on the left, page number top right.
+        header_size = _pt(layout.header_font_size_pt)
+        y = header_distance
+        x = margin_left
+        for key, chunk in _font_runs(header.left, fonts, prefer_cjk_body=True):
+            pdf.set_font(key, "", header_size)
+            pdf.set_xy(_pt(x), _pt(y))
             pdf.cell(text=chunk)
-            if key != "mono":
-                continue
-        pdf.set_font("mono", "", _pt(layout.header_font_size_pt))
+            x += Decimal(str(pdf.get_string_width(chunk)))
+
         page_label = str(page_index)
-        label_width = pdf.get_string_width(page_label)
-        pdf.set_xy(_pt(margin_left + body_width - Decimal(str(label_width))), _pt(header_y))
+        pdf.set_font("cjk", "", header_size)
+        label_width = Decimal(str(pdf.get_string_width(page_label)))
+        pdf.set_xy(_pt(margin_left + body_width - label_width), _pt(y))
         pdf.cell(text=page_label)
 
         # Body: draw each line at an exact baseline so nothing can reflow.
+        size = _pt(layout.body_font_size_pt)
         body_top = margin_top
         for row, line in enumerate(page_lines):
-            baseline = body_top + line_pt * (row + 1) - layout.body_font_size_pt * Decimal(
-                "0.25"
+            baseline = (
+                body_top
+                + line_pt * (row + 1)
+                - layout.body_font_size_pt * Decimal("0.25")
             )
-            x = margin_left
-            for key, chunk in _font_runs(line, fonts):
-                size = _pt(layout.body_font_size_pt)
-                pdf.set_font("mono" if key == "mono" else "cjk", "", size)
+            x = text_left
+            for key, chunk in _font_runs(line, fonts, prefer_cjk_body=True):
+                pdf.set_font(key, "", size)
                 pdf.set_xy(_pt(x), _pt(baseline))
                 pdf.cell(text=chunk)
                 x += Decimal(str(pdf.get_string_width(chunk)))
