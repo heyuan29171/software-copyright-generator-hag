@@ -323,6 +323,30 @@ class App:
 
         ttk.Button(bar, text="打开输出目录", command=self._open_output).pack(side="right")
 
+        # The default already avoids Chinese by choosing cleaner files; this
+        # switch is for people who want the count pushed lower still, at the
+        # cost of removing lines from the material.
+        options = ttk.Frame(parent)
+        options.pack(fill="x")
+
+        self.drop_cjk_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            options,
+            text="额外删除纯中文行（会改变源码内容，仅在默认方式仍超标时使用）",
+            variable=self.drop_cjk_var,
+        ).pack(anchor="w")
+
+        ttk.Label(
+            options,
+            text=(
+                "默认：自动从中文最少的源码文件中挑选 60 页，不修改任何代码。"
+                "若仍需更少中文，才勾选上面一项。"
+            ),
+            foreground="#666666",
+            wraplength=760,
+            justify="left",
+        ).pack(anchor="w", pady=(2, 0))
+
     def _build_output(self, parent: ttk.Frame) -> None:
         box = ttk.LabelFrame(parent, text="结果", padding=6)
         box.pack(fill="both", expand=True)
@@ -392,7 +416,15 @@ class App:
             messagebox.showerror("目录不存在", f"找不到目录：{state.project_root}")
             return
 
-        self._append("正在生成材料，请稍候…")
+        drop_cjk = self.drop_cjk_var.get()
+        if drop_cjk:
+            self._append(
+                "正在生成材料，已启用「删除纯中文行」——注意这会改变源码内容。"
+            )
+        else:
+            self._append(
+                "正在生成材料。将从中文最少的源码文件中挑选 60 页，不修改任何代码。"
+            )
         self._set_busy(True)
 
         def job() -> tuple[str, Any]:
@@ -402,6 +434,7 @@ class App:
                 version=state.version,
                 output_dir=state.output_dir or None,
                 fields=state.to_fields(),
+                drop_cjk=drop_cjk,
             )
             return "generate", result
 

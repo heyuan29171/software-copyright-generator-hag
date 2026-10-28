@@ -84,6 +84,7 @@ def build_materials(
     include: list[str] | None = None,
     exclude: list[str] | None = None,
     render: bool = True,
+    drop_cjk: bool = False,
 ) -> BuildResult:
     """Generate the code material, the form values and a verification report."""
     if not software_name.strip():
@@ -118,6 +119,7 @@ def build_materials(
             include=include,
             exclude=exclude,
             render=render,
+            drop_cjk=drop_cjk,
         )
     except PipelineError as exc:
         pipeline_error = str(exc)
@@ -145,6 +147,24 @@ def build_materials(
         return BuildResult(output_dir=out, report=report, pipeline=None)
 
     files = [result.pdf_path] if result.pdf_path else []
+
+    report.add(
+        Check(
+            "W-22",
+            Level.PASS,
+            (
+                "已删除纯中文行（会改变源码内容）"
+                if drop_cjk
+                else "已按中文占比挑选源码文件，未修改任何代码"
+            ),
+            (
+                "可通过开关调整"
+                if drop_cjk
+                else "若仍需更少中文行，可开启「删除纯中文行」"
+            ),
+            "工程判断（非法规要求）",
+        )
+    )
 
     # A run that was asked to render but produced no file has not succeeded,
     # however clean the rest of the pipeline looked.

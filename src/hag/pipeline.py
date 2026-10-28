@@ -135,8 +135,14 @@ def clean_sources(
     *,
     layout: CodeLayout = CODE_LAYOUT,
     lines_per_page: int = LINES_PER_PAGE,
+    drop_cjk: bool = False,
 ) -> CleanResult:
-    """Strip comments, drop blanks and wrap, producing paginatable lines."""
+    """Strip comments, drop blanks and wrap, producing paginatable lines.
+
+    `drop_cjk` additionally removes lines that are Chinese prose with no code
+    in them. It is off by default: deleting source is a last resort, and the
+    usual fix for too much Chinese is to draw the pages from cleaner files.
+    """
     max_columns = max_columns_for(layout)
     result = CleanResult()
 
@@ -146,7 +152,7 @@ def clean_sources(
             stripped.text,
             max_columns,
             tab_width=layout.tab_width,
-            drop_pure_cjk=True,
+            drop_pure_cjk=drop_cjk,
         )
         if not lines:
             result.warnings.append(
@@ -261,6 +267,7 @@ def run_code_pipeline(
     include: Sequence[str] | None = None,
     exclude: Sequence[str] | None = None,
     render: bool = True,
+    drop_cjk: bool = False,
 ) -> PipelineResult:
     """Discover, clean, select, paginate and (optionally) render.
 
@@ -277,7 +284,9 @@ def run_code_pipeline(
             f"{len(discovery.skipped)} entries were skipped"
         )
 
-    cleaned = clean_sources(sources, layout=layout, lines_per_page=lines_per_page)
+    cleaned = clean_sources(
+        sources, layout=layout, lines_per_page=lines_per_page, drop_cjk=drop_cjk
+    )
     if not cleaned.files:
         raise PipelineError("every discovered file was empty after cleaning")
 

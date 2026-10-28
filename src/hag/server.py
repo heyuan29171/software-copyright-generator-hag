@@ -54,7 +54,10 @@ TOOL_DESCRIPTIONS = {
     "generate_materials": (
         "Generate the source-code PDF, the application form values and a "
         "verification report into an output directory. Returns ok=false with the "
-        "blocking reasons when the material must not be submitted."
+        "blocking reasons when the material must not be submitted. Pages are "
+        "drawn from whichever files contain the least Chinese; set drop_cjk=true "
+        "to also delete Chinese-only lines, which alters the source and is "
+        "therefore off by default."
     ),
     "check_fields": (
         "Validate application form values against the published rules without "
@@ -218,8 +221,14 @@ def generate_materials(
     fields: dict[str, Any] | None = None,
     include: list[str] | None = None,
     exclude: list[str] | None = None,
+    drop_cjk: bool = False,
 ) -> dict[str, Any]:
-    """Generate the PDF, form values and report."""
+    """Generate the PDF, form values and report.
+
+    By default the sixty pages are drawn from whichever files contain the least
+    Chinese. `drop_cjk` additionally deletes lines that are Chinese prose with
+    no code; that alters the source, so it is opt-in.
+    """
     if not software_name.strip():
         return {"ok": False, "error": "software_name is required"}
     if not version.strip():
@@ -235,6 +244,7 @@ def generate_materials(
             fields=parsed,
             include=include,
             exclude=exclude,
+            drop_cjk=drop_cjk,
         )
     except PipelineError as exc:
         return {"ok": False, "error": str(exc)}
