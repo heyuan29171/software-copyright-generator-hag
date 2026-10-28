@@ -42,6 +42,22 @@ class CleanedFile:
     def line_count(self) -> int:
         return len(self.lines)
 
+    @property
+    def cjk_line_count(self) -> int:
+        """Lines containing Chinese characters."""
+        return sum(1 for line in self.lines if _has_cjk(line))
+
+    @property
+    def cjk_ratio(self) -> float:
+        """Share of lines containing Chinese, used to prefer cleaner files."""
+        if not self.lines:
+            return 0.0
+        return self.cjk_line_count / len(self.lines)
+
+
+def _has_cjk(text: str) -> bool:
+    return any("\u4e00" <= ch <= "\u9fff" for ch in text)
+
 
 def safe_cut_offsets(lines: Sequence[str]) -> tuple[int, ...]:
     """Offsets where the material may be split without breaking a unit.
@@ -69,6 +85,32 @@ def safe_cut_offsets(lines: Sequence[str]) -> tuple[int, ...]:
             continue
         offsets.append(index)
     return tuple(offsets)
+
+
+def prefer_low_cjk_order(files: Sequence[CleanedFile]) -> list[CleanedFile]:
+    """Order files so the material draws on the least Chinese-heavy sources.
+
+    A Django or Vue project is full of `verbose_name="羊只状态"` and
+    `<h3>项目定位</h3>`. Deleting those lines would falsify the code, so the
+    remaining option is to reach sixty pages using files that are mostly
+    non-Chinese.
+
+    Files are grouped into three bands by the share of lines containing
+    Chinese, and each band keeps its original order. Sorting purely by ratio
+    would shuffle related files apart, and the material should still read as a
+    coherent program.
+    """
+    def band(file: CleanedFile) -> int:
+        ratio = file.cjk_ratio
+        if ratio <= 0.10:
+            return 0
+        if ratio <= 0.40:
+            return 1
+        return 2
+
+    # Within a band, the cleaner file goes first; ties keep their original
+    # order so related files stay adjacent.
+    return sorted(files, key=lambda f: (band(f), f.cjk_ratio))
 
 
 @dataclass(slots=True)
@@ -241,9 +283,22 @@ def run_code_pipeline(
 
     unselected = count_unselected(discovery.sources, cleaned.files)
 
+    # Draw the material from the least Chinese-heavy files first. Deleting
+    # Chinese lines would falsify the source, so the ordering is what keeps the
+    # Chinese-line count down instead.
+    ordered = prefer_low_cjk_order(cleaned.files)
+    spans = [
+        FileSpan(
+            rel_path=f.rel_path,
+            line_count=f.line_count,
+            safe_cuts=safe_cut_offsets(f.lines),
+        )
+        for f in ordered
+    ]
+
     try:
         selection = select_material(
-            cleaned.spans(),
+            spans,
             lines_per_page=lines_per_page,
             unselected_candidate_count=unselected,
         )
