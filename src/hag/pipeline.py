@@ -62,26 +62,41 @@ def _has_cjk(text: str) -> bool:
 def safe_cut_offsets(lines: Sequence[str]) -> tuple[int, ...]:
     """Offsets where the material may be split without breaking a unit.
 
-    A cut is safe when the next kept line starts at column zero and is not a
-    closer, continuation or binary operator. Cutting anywhere else would sever
-    an indented block or split an expression across the segment boundary, and
-    a reviewer reading the material would see a fragment that does not stand
-    on its own.
+    A cut is safe when the next kept line is at the file's own base indentation
+    and is not a closer, continuation or binary operator. Cutting anywhere else
+    would sever an indented block or split an expression, and a reviewer would
+    see a fragment that does not stand on its own.
 
-    Blank lines have already been removed, so an empty line is not available
-    as a natural boundary; the indentation test is what carries the weight.
+    Base indentation is the *minimum* indentation across the file, not zero.
+    Requiring column zero meant a Vue component found no cut points at all,
+    because everything inside `<template>` and `<script>` is indented. A file
+    whose shallowest line sits at six spaces is still cuttable at six spaces;
+    what matters is that the cut falls on a boundary the reader can follow.
     """
-    unsafe_start = ("}", ")", "]", ".", "+", "-", "*", "/", ",", ";", "&&", "||", "?")
+    unsafe_start = (
+        "}", ")", "]", ".", "+", "-", "*", "/", ",", ";", "&&", "||", "?",
+        # HTML/JSX closing tags: cutting before one leaves the opening tag in
+        # the previous segment and an orphan closer in the next.
+        "</",
+    )
+
+    indents = [
+        len(line) - len(line.lstrip())
+        for line in lines
+        if line.strip()
+    ]
+    if not indents:
+        return ()
+    base = min(indents)
+
     offsets: list[int] = []
     for index, line in enumerate(lines):
         stripped = line.strip()
-        if not stripped:
+        if not stripped or index == 0:
             continue
-        if len(line) - len(line.lstrip()) != 0:
+        if len(line) - len(line.lstrip()) > base:
             continue
         if stripped.startswith(unsafe_start):
-            continue
-        if index == 0:
             continue
         offsets.append(index)
     return tuple(offsets)

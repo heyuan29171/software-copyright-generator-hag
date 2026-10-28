@@ -112,8 +112,9 @@ class TestSegmentNeverExceedsThirty:
         assert FALLBACK_MAX_SEGMENT_PAGES == 30
 
     def test_result_within_ceiling(self) -> None:
-        """Two 1450-line files plus a bridge: neither segment may exceed thirty
-        pages, and each is trimmed inside a file to land exactly."""
+        """Two 1450-line files plus a bridge: 1450+200 is 1650 lines, enough
+        for the front's 1500, but that leaves only 200 for the back. The tool
+        now says so instead of reporting a vague shortfall."""
         files = [
             FileSpan("a.py", 1450, tuple(range(1, 1450))),
             FileSpan("b.py", 200),
@@ -121,9 +122,8 @@ class TestSegmentNeverExceedsThirty:
         ]
         with pytest.raises(Exception) as exc:
             select_material(files)
-        # 1450 + 200 = 1650 lines available for the front, but no cut lands on
-        # 1500, so the run refuses rather than overshooting thirty pages.
-        assert "usable source" in str(exc.value) or "back segment" in str(exc.value)
+        message = str(exc.value)
+        assert "后段" in message or "可用素材" in message
 
     def test_segment_never_exceeds_thirty_when_pieces_are_whole(self) -> None:
         """Whole files summing to just over thirty pages are still capped."""

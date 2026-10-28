@@ -194,14 +194,15 @@ def _take_from(
             remaining -= span.line_count
             continue
 
-        # This file is longer than what is still needed; trim it at a safe cut.
+        # This file could cover the rest on its own, but the cut that lands
+        # closest below the budget may take fewer lines than that. Take what
+        # the cut allows and let the next file fill the remainder.
         take = _edge_slice(span, remaining, from_end=from_end)
         if take is None:
-            # No cut far enough into this file. Taking it whole would exceed
-            # the statutory thirty pages, so it cannot be used here at all.
+            # No cut inside the budget, so the file cannot be used partially.
             continue
         pieces.append(_Piece(index, take[0], take[1]))
-        remaining = 0
+        remaining -= take[1] - take[0]
 
     if remaining != 0:
         return None
@@ -211,24 +212,78 @@ def _take_from(
     return pieces
 
 
+def _shortfall_message(
+    files: tuple[FileSpan, ...],
+    need: int,
+    used: list[bool],
+    *,
+    after_front: bool = False,
+) -> str:
+    """Say how much material exists and why it could not be used.
+
+    "Not enough material" and "enough material, but no place to cut it" are
+    different problems with different fixes, and a message that conflates them
+    sends the user looking for files they do not need.
+    """
+    available = sum(f.line_count for f, u in zip(files, used) if not u)
+    usable_with_cuts = sum(
+        f.line_count for f, u in zip(files, used) if not u and f.safe_cuts
+    )
+
+    scope = "后段" if after_front else "前段"
+    head = f"{scope}需要 {need} 行（{SEGMENT_PAGES} 页），"
+
+    if available < need:
+        return (
+            f"{head}但可用素材只有 {available} 行。请增加参与抽取的文件。"
+        )
+
+    if usable_with_cuts < need:
+        return (
+            f"{head}可用素材共 {available} 行，看似充足，"
+            f"但其中只有 {usable_with_cuts} 行所在的文件存在可切分的位置。"
+            "大文件如果找不到安全的切分点就无法截取。"
+        )
+
+    return (
+        f"{head}可用素材共 {available} 行，其中 {usable_with_cuts} 行可切分，"
+        "但无法在不切断代码结构的前提下正好凑够这个行数。"
+        "请增加文件，或换用更小的源文件。"
+    )
+
+
 def _edge_slice(
     span: FileSpan, need: int, *, from_end: bool
 ) -> tuple[int, int] | None:
-    """Smallest prefix or suffix of at least `need` lines ending on a safe cut."""
+    """Largest prefix or suffix of at most `need` lines that ends on a cut.
+
+    "At most" rather than "at least": overshooting would push the segment past
+    its thirty-page budget, and the caller rejects that. Undershooting just
+    means the file contributes slightly less than asked, and the next file
+    makes up the difference.
+
+    Returns None when no cut leaves anything usable.
+    """
     candidates = span.cut_candidates()
+
     if from_end:
-        # Take a suffix: start at (line_count - size) for the smallest size
-        # that lands on a safe cut.
-        options = [c for c in candidates if span.line_count - c >= need]
-        if not options:
+        # Suffix of size (line_count - cut); the smallest such size that is
+        # still within the budget.
+        usable = [
+            c for c in candidates
+            if 0 < span.line_count - c <= need
+        ]
+        if not usable:
             return None
-        cut = min(options, key=lambda c: span.line_count - c)
+        # Largest suffix that still fits.
+        cut = min(usable)
         return cut, span.line_count
 
-    options = [c for c in candidates if c >= need]
-    if not options:
+    usable = [c for c in candidates if 0 < c <= need]
+    if not usable:
         return None
-    cut = min(options)
+    # Largest prefix that still fits.
+    cut = max(usable)
     return 0, cut
 
 
@@ -273,21 +328,14 @@ def select_material(
 
     front_pieces = _take_from(ordered, used, need, from_end=False)
     if front_pieces is None:
-        raise SelectionError(
-            f"the material does not contain {SEGMENT_PAGES} pages "
-            f"({need} lines) of usable source. Either there are too few files, "
-            "or the files are large and no safe cut point was found inside them."
-        )
+        raise SelectionError(_shortfall_message(ordered, need, used))
+
     for piece in front_pieces:
         used[piece.file_index] = True
 
     back_pieces = _take_from(ordered, used, need, from_end=True)
     if back_pieces is None:
-        raise SelectionError(
-            f"after reserving the front {SEGMENT_PAGES} pages, fewer than "
-            f"{SEGMENT_PAGES} pages of source remain for the back segment. "
-            "Select more files."
-        )
+        raise SelectionError(_shortfall_message(ordered, need, used, after_front=True))
 
     front = _merge(front_pieces)
     back = _merge(back_pieces)
