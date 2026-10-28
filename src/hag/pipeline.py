@@ -43,6 +43,34 @@ class CleanedFile:
         return len(self.lines)
 
 
+def safe_cut_offsets(lines: Sequence[str]) -> tuple[int, ...]:
+    """Offsets where the material may be split without breaking a unit.
+
+    A cut is safe when the next kept line starts at column zero and is not a
+    closer, continuation or binary operator. Cutting anywhere else would sever
+    an indented block or split an expression across the segment boundary, and
+    a reviewer reading the material would see a fragment that does not stand
+    on its own.
+
+    Blank lines have already been removed, so an empty line is not available
+    as a natural boundary; the indentation test is what carries the weight.
+    """
+    unsafe_start = ("}", ")", "]", ".", "+", "-", "*", "/", ",", ";", "&&", "||", "?")
+    offsets: list[int] = []
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if len(line) - len(line.lstrip()) != 0:
+            continue
+        if stripped.startswith(unsafe_start):
+            continue
+        if index == 0:
+            continue
+        offsets.append(index)
+    return tuple(offsets)
+
+
 @dataclass(slots=True)
 class CleanResult:
     files: list[CleanedFile] = field(default_factory=list)
@@ -50,7 +78,14 @@ class CleanResult:
     warnings: list[str] = field(default_factory=list)
 
     def spans(self) -> list[FileSpan]:
-        return [FileSpan(rel_path=f.rel_path, line_count=f.line_count) for f in self.files]
+        return [
+            FileSpan(
+                rel_path=f.rel_path,
+                line_count=f.line_count,
+                safe_cuts=safe_cut_offsets(f.lines),
+            )
+            for f in self.files
+        ]
 
 
 def clean_sources(
@@ -69,6 +104,7 @@ def clean_sources(
             stripped.text,
             max_columns,
             tab_width=layout.tab_width,
+            drop_pure_cjk=True,
         )
         if not lines:
             result.warnings.append(

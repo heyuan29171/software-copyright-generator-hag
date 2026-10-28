@@ -100,23 +100,87 @@ def hard_cap_line(text: str, cap: int) -> list[str]:
     return [text[i : i + cap] for i in range(0, len(text), cap)]
 
 
+def is_cjk_line(line: str) -> bool:
+    """True when the line contains any Chinese character."""
+    return any("\u4e00" <= ch <= "\u9fff" for ch in line)
+
+
+_CODE_CHARS = set("{}[]()<>=;:,.+-*/%&|!?\"'`@#$\\")
+
+# Comment and string delimiters are stripped before judging whether a line
+# carries code, so that "// 这是注释" and '"""说明"""' are not mistaken for lines
+# containing syntax.
+_COMMENT_PREFIXES = (
+    "//",
+    "#",
+    "--",
+    ";",
+    "/*",
+    "*",
+    "<!--",
+    "rem ",
+    "REM ",
+    '"""',
+    "'''",
+    '"',
+    "'",
+    "`",
+)
+
+
+def is_code_bearing(line: str) -> bool:
+    """True when the line contains something other than prose.
+
+    A line of Chinese with no punctuation or syntax is a comment or a string
+    fragment; keeping it consumes the Chinese-line budget without showing any
+    of the program's logic.
+
+    Comment markers are removed first: their punctuation would otherwise make
+    every commented-out Chinese sentence look like code.
+    """
+    stripped = line.strip()
+    # Strip a leading comment or string delimiter, then a matching trailing one,
+    # so the delimiters themselves never count as syntax.
+    for prefix in _COMMENT_PREFIXES:
+        if stripped.startswith(prefix):
+            stripped = stripped[len(prefix) :].strip()
+            break
+    for suffix in ('"""', "'''", '"', "'", "`", "*/", "-->"):
+        if stripped.endswith(suffix):
+            stripped = stripped[: -len(suffix)].strip()
+            break
+    if not stripped:
+        return False
+    return any(
+        ch in _CODE_CHARS or (ch.isascii() and ch.isalnum()) for ch in stripped
+    )
+
+
 def material_lines(
     text: str,
     max_columns: int,
     *,
     tab_width: int = 4,
     hard_cap: int = 3000,
+    drop_pure_cjk: bool = False,
 ) -> list[str]:
     """Turn raw file text into the physical lines that will be paginated.
 
     Blank lines are dropped ([审]: they dilute the effective line count) and
     over-long lines are wrapped. Tabs are expanded before measuring so column
     arithmetic matches what the reader sees.
+
+    `drop_pure_cjk` removes lines that are Chinese prose with no code in them.
+    The material should read as a program; a reviewer counting Chinese lines
+    per page is judging whether it does. Dropping these lines is the difference
+    between a warning that says the limit was exceeded and actually meeting it.
     """
     result: list[str] = []
     for raw in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         cleaned = sanitize_line(raw, tab_width=tab_width)
         if not cleaned.strip():
+            continue
+        if drop_pure_cjk and is_cjk_line(cleaned) and not is_code_bearing(cleaned):
             continue
         for chunk in hard_cap_line(cleaned, hard_cap):
             result.extend(wrap_display_line(chunk, max_columns))

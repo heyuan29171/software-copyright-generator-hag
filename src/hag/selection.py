@@ -55,10 +55,29 @@ class FileSpan:
 
     rel_path: str
     line_count: int
+    safe_cuts: tuple[int, ...] = ()
+    """Line offsets inside this file where a segment may be cut.
+
+    The statute asks for "thirty continuous pages", not "thirty pages ending on
+    a file boundary". Insisting on file boundaries is a convention copied from
+    other tools, and it fails badly on real projects: one 60-page Vue component
+    makes an exact split arithmetically impossible, which produced a 59-page
+    document with a 31-page segment.
+
+    So splits may land inside a file, but only at a point that does not break a
+    syntactic unit. The pipeline supplies those offsets (blank lines and
+    top-level boundaries); when it supplies none, only the file end is eligible.
+    """
 
     def __post_init__(self) -> None:
         if self.line_count < 0:
             raise ValueError(f"line_count must be non-negative, got {self.line_count}")
+
+    def cut_candidates(self) -> tuple[int, ...]:
+        """Offsets at which this file may end a segment, file end included."""
+        points = {c for c in self.safe_cuts if 0 < c < self.line_count}
+        points.add(self.line_count)
+        return tuple(sorted(points))
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,39 +191,61 @@ def _find_cut_suffix(
     return best
 
 
+def _reachable_offsets(files: list[FileSpan]) -> list[int]:
+    """Every line offset at which the material may be split.
+
+    Offsets accumulate across files; inside a file only its safe cuts are
+    offered. The result is sorted and de-duplicated.
+    """
+    offsets: set[int] = set()
+    base = 0
+    for file in files:
+        for cut in file.cut_candidates():
+            offsets.add(base + cut)
+        base += file.line_count
+    offsets.add(base)
+    return sorted(o for o in offsets if o > 0)
+
+
 def _arrange_exact(
     files: list[FileSpan], lines_per_page: int
 ) -> tuple[int, int] | None:
-    """Find a (front_cut, back_start) pair that yields exactly 30+30 pages.
+    """Find (front_end, back_start) line offsets giving exactly 30+30 pages.
 
-    `front_cut` is the number of files in the front segment. `back_start` is
-    the index of the first file in the back segment. There must be at least
-    one file strictly between them for the result to be a genuine
-    front/back split; if the whole file fits in 60 pages there is nothing to
-    split and the caller should have chosen ALL mode.
+    Both offsets must be reachable cut points. Crucially they must also fall on
+    a page boundary: the two excerpts are concatenated and re-paginated, so a
+    front segment ending one line into page 30 leaves a half-empty page that
+    the back segment's opening lines flow into, silently merging two pages
+    into one. An earlier version only required ceil(front/50) == 30, which
+    accepted 1451 lines, and produced a 59-page document labelled "30+30".
     """
-    counts = [f.line_count for f in files]
-    total = sum(counts)
+    total = sum(f.line_count for f in files)
     if total == 0:
         return None
 
-    front_cut = _find_cut_prefix(counts, SEGMENT_PAGES, lines_per_page)
-    if front_cut is None:
+    target = SEGMENT_PAGES * lines_per_page
+    offsets = _reachable_offsets(files)
+
+    # Only offsets that fill their last page exactly are usable here.
+    fronts = {o for o in offsets if o == target}
+    if not fronts:
         return None
 
-    front_lines = sum(counts[:front_cut])
-    remaining = counts[front_cut:]
-    back_start_offset = _find_cut_suffix(remaining, SEGMENT_PAGES, lines_per_page)
-    if back_start_offset is None:
+    backs = {o for o in offsets if 0 < o <= total and total - o == target}
+    if not backs:
         return None
 
-    back_start = front_cut + back_start_offset
-    if back_start <= front_cut:
-        # No files in the middle: this is not a real split.
+    best: tuple[int, int, int] | None = None
+    for front in fronts:
+        for back in backs:
+            if back <= front:
+                continue
+            gap = back - front
+            if best is None or gap > best[0]:
+                best = (gap, front, back)
+    if best is None:
         return None
-
-    _ = front_lines
-    return front_cut, back_start
+    return best[1], best[2]
 
 
 def _arrange_reversed(files: list[FileSpan]) -> list[FileSpan]:
@@ -268,19 +309,18 @@ def select_material(
         arranged = _arrange_exact(candidate, lines_per_page)
         if arranged is None:
             continue
-        front_cut, back_start = arranged
-        front_lines = sum(f.line_count for f in candidate[:front_cut])
-        back_lines = sum(f.line_count for f in candidate[back_start:])
+        front_end, back_start_offset = arranged
+        back_lines = total_lines - back_start_offset
         return Selection(
             mode=SelectionMode.FRONT_BACK,
             ordered_files=tuple(candidate),
             lines_per_page=lines_per_page,
             total_lines=total_lines,
             total_pages=total_pages,
-            front_pages=_pages_for(front_lines, lines_per_page),
+            front_pages=_pages_for(front_end, lines_per_page),
             back_pages=_pages_for(back_lines, lines_per_page),
-            front_end_line=front_lines,
-            back_start_line=total_lines - back_lines + 1,
+            front_end_line=front_end,
+            back_start_line=back_start_offset + 1,
             exact=True,
         )
 
@@ -295,33 +335,28 @@ def _fallback_selection(
     prefix = _prefix_counts(counts)
     total_lines = prefix[-1]
 
-    # Search both cut points together. Fixing only the front cut and taking
-    # "everything else" as the back segment is wrong whenever the project is
-    # much longer than 60 pages: the middle files should simply be skipped.
-    #
-    # The preferred band is tried first. Only if it yields nothing is the
-    # wider band considered, because projects with uniformly sized files step
-    # in file-sized increments and cannot hit 28..30 at all; refusing to
-    # produce anything there would be worse than a documented 31.
+    # Search at every reachable cut point rather than only at file edges.
     target_lines = SEGMENT_PAGES * lines_per_page
+    offsets = _reachable_offsets(files)
 
     def search(lo: int, hi: int) -> tuple[int, int, int] | None:
         best: tuple[int, int, int] | None = None
-        for front_k in range(1, len(counts)):
-            front_lines = prefix[front_k]
-            front_pages = _pages_for(front_lines, lines_per_page)
+        for front in offsets:
+            front_pages = _pages_for(front, lines_per_page)
             if not (lo <= front_pages <= hi):
                 continue
-            for back_start in range(front_k, len(counts)):
-                back_lines = total_lines - prefix[back_start]
+            for back in offsets:
+                if back <= front:
+                    continue
+                back_lines = total_lines - back
                 if back_lines <= 0:
                     continue
                 back_pages = _pages_for(back_lines, lines_per_page)
                 if not (lo <= back_pages <= hi):
                     continue
-                delta = abs(front_lines - target_lines) + abs(back_lines - target_lines)
+                delta = abs(front - target_lines) + abs(back_lines - target_lines)
                 if best is None or delta < best[0]:
-                    best = (delta, front_k, back_start)
+                    best = (delta, front, back)
         return best
 
     best = search(FALLBACK_MIN_SEGMENT_PAGES, FALLBACK_MAX_SEGMENT_PAGES)
@@ -331,26 +366,19 @@ def _fallback_selection(
         used_wider_band = best is not None
 
     if best is None:
-        # Report the closest single-cut attempt to keep the message concrete.
-        approx_k = 1
-        best_delta = None
-        for k in range(1, len(counts)):
-            delta = abs(prefix[k] - target_lines)
-            if best_delta is None or delta < best_delta:
-                best_delta = delta
-                approx_k = k
+        approx = min(offsets, key=lambda o: abs(o - target_lines))
         raise SelectionError(
             f"cannot approach 30+30 pages within the allowed tolerance: the closest "
-            f"file-boundary split gives front {_pages_for(prefix[approx_k], lines_per_page)} "
-            f"pages and back {_pages_for(total_lines - prefix[approx_k], lines_per_page)} "
+            f"split gives front {_pages_for(approx, lines_per_page)} "
+            f"pages and back {_pages_for(total_lines - approx, lines_per_page)} "
             f"pages, outside {FALLBACK_MIN_SEGMENT_PAGES}-{FALLBACK_HARD_MAX_SEGMENT_PAGES}. "
-            "Select different files, ideally several smaller ones near the middle, "
-            "then retry."
+            "Select different files, then retry."
         )
 
-    _, front_k, back_start = best
-    front_lines = prefix[front_k]
-    back_lines = total_lines - prefix[back_start]
+    _, front_lines, back_start_offset = best
+    back_lines = total_lines - back_start_offset
+    front_pages = _pages_for(front_lines, lines_per_page)
+    back_pages = _pages_for(back_lines, lines_per_page)
     front_pages = _pages_for(front_lines, lines_per_page)
     back_pages = _pages_for(back_lines, lines_per_page)
 
