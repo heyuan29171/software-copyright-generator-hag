@@ -9,6 +9,7 @@ build/
 dist/
 *.egg-info/
 .eggs/
+*.spec
 
 # Testing / coverage
 .pytest_cache/
