@@ -34,7 +34,7 @@ pip install -e ".[all]"
 
 ### 双击 EXE（推荐给普通用户）
 
-下载 `软著申请材料生成器.exe`，双击即可使用。**只有一个窗口，不会弹出命令行**，也不需要安装 Python 或任何依赖。
+下载 [`hag-softcopyright.exe`](https://github.com/heyuan29171/software-copyright-generator-hag/releases/latest)，双击即可使用。**只有一个窗口，不会弹出命令行**，也不需要安装 Python 或任何依赖。
 
 1. 点「浏览…」选定项目目录
 2. 填写软件全称、著作权人、开发完成日期
@@ -49,7 +49,7 @@ pip install -e ".[all]"
 {
   "mcpServers": {
     "hag": {
-      "command": "D:/路径/软著申请材料生成器.exe",
+      "command": "D:/路径/hag-softcopyright.exe",
       "args": ["--mcp"]
     }
   }
@@ -140,7 +140,7 @@ pip install pyinstaller
 python scripts/build_exe.py
 ```
 
-产物：`dist/软著申请材料生成器.exe`（单文件、无控制台、约 53 MB）。
+产物：`dist/软著申请材料生成器.exe`，单文件、无控制台、约 53 MB。发布时改名为 `hag-softcopyright.exe`，避免中文文件名在各平台出错。
 
 打包后必须验证功能而不只是能开窗：
 
