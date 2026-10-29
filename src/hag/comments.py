@@ -40,9 +40,38 @@ class StripMethod(str, Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class SpecialString:
+    """A string literal whose syntax the generic scanner cannot infer.
+
+    The state machine understands `"`, `'` and backtick, which covers most
+    languages. A handful use additional forms that matter for comment
+    stripping, because the body may contain `//` or `#`:
+
+      * PowerShell here-strings `@" ... "@` span lines and are opened only at
+        the end of a line, closed only at the start of one;
+      * Groovy slashy strings `/.../` look exactly like division, and are only
+        recognisable in an expression position;
+      * HCL heredocs `<<EOF ... EOF`.
+
+    `opener` and `closer` are literal text. `at_line_end` / `at_line_start`
+    record the PowerShell rule that the delimiters must own their line.
+    """
+
+    opener: str
+    closer: str
+    escape: str = ""
+    multiline: bool = True
+    at_line_end: bool = False
+    at_line_start: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class CommentSyntax:
     line: tuple[str, ...] = ()
     block: tuple[tuple[str, str], ...] = ()
+    special: tuple[SpecialString, ...] = ()
+    slashy_regex: bool = False
+    """True for Groovy, where `/.../` is a string in expression position."""
 
 
 _C_LIKE = CommentSyntax(line=("//",), block=(("/*", "*/"),))
@@ -53,9 +82,47 @@ _HTML = CommentSyntax(block=(("<!--", "-->"),))
 
 # Single-file components mix dialects: a Vue or Svelte file holds an HTML
 # template, a script block and a style block, so all three comment styles can
-# appear. Treating them as C-like only left `<!-- -->` in place, which is a
+# appear. Handling only the C-like pair left `<!-- -->` in place, which is a
 # real omission rather than a safe conservative choice.
 _SFC = CommentSyntax(line=("//",), block=(("/*", "*/"), ("<!--", "-->")))
+
+# PowerShell here-strings. The opener must end its line and the closer must
+# begin one; inside, `#` is literal text, not a comment.
+_POWERSHELL = CommentSyntax(
+    line=("#",),
+    block=(("<#", "#>"),),
+    special=(
+        SpecialString("@'", "'@", at_line_end=True, at_line_start=True),
+        SpecialString('@"', '"@', at_line_end=True, at_line_start=True),
+    ),
+)
+
+# Groovy slashy strings. `/` is division in most positions, so this is only
+# treated as a string when the previous non-space character cannot end an
+# expression. Getting it wrong in the other direction would delete code.
+_GROOVY = CommentSyntax(
+    line=("//",),
+    block=(("/*", "*/"),),
+    special=(
+        SpecialString('"""', '"""', escape="\\"),
+        SpecialString("'''", "'''"),
+        SpecialString("$/", "/$", escape="\\"),
+    ),
+    slashy_regex=True,
+)
+
+# HCL/Terraform: `//` and `#` line comments, `/* */` blocks, and heredocs.
+_HCL = CommentSyntax(
+    line=("//", "#"),
+    block=(("/*", "*/"),),
+    special=(SpecialString('"', '"', escape="\\"),),
+)
+
+# R: `#` comments. Raw strings `r"( ... )"` may contain `#`.
+_R_LANG = CommentSyntax(
+    line=("#",),
+    special=(SpecialString('r"(', ')"'), SpecialString('r"[', ']"')),
+)
 
 # Languages we can strip fully with the state machine.
 _FULL_STRIP: dict[str, CommentSyntax] = {
@@ -81,6 +148,13 @@ _FULL_STRIP: dict[str, CommentSyntax] = {
     ".dart": _C_LIKE,
     ".scala": _C_LIKE,
     ".php": _C_LIKE,
+    ".groovy": _GROOVY,
+    ".gvy": _GROOVY,
+    ".gradle": _GROOVY,
+    ".tf": _HCL,
+    ".tfvars": _HCL,
+    ".hcl": _HCL,
+    ".r": _R_LANG,
     ".css": CommentSyntax(block=(("/*", "*/"),)),
     ".scss": CommentSyntax(line=("//",), block=(("/*", "*/"),)),
     ".less": CommentSyntax(line=("//",), block=(("/*", "*/"),)),
@@ -89,6 +163,8 @@ _FULL_STRIP: dict[str, CommentSyntax] = {
     ".html": _HTML,
     ".htm": _HTML,
     ".xml": _HTML,
+    ".ps1": _POWERSHELL,
+    ".psm1": _POWERSHELL,
 }
 
 # Languages where only whole-line comments can be removed safely here.
@@ -96,14 +172,11 @@ _LINE_ONLY_STRIP: dict[str, CommentSyntax] = {
     ".sh": _HASH,
     ".bash": _HASH,
     ".zsh": _HASH,
-    ".ps1": _HASH,
-    ".psm1": _HASH,
     ".rb": _HASH,
     ".py": _HASH,  # overridden by the tokenizer path
     ".yml": _HASH,
     ".yaml": _HASH,
     ".toml": _HASH,
-    ".r": _HASH,
     ".pl": _HASH,
     ".sql": _DASH,
     ".lua": _DASH,
@@ -144,9 +217,14 @@ def syntax_for(suffix: str) -> CommentSyntax | None:
 def _strip_state_machine(text: str, syntax: CommentSyntax) -> tuple[str, int]:
     """Remove comments using a character-level state machine.
 
-    Tracks string literals (single, double, backtick, triple-quoted) so that
-    ``"http://example.com"`` keeps its slashes, and block comments can nest no
-    deeper than the language allows.
+    Tracks string literals so that ``"http://example.com"`` keeps its slashes.
+    Beyond the common `"`, `'` and backtick forms, a language may declare
+    special strings (PowerShell here-strings, Groovy slashy strings, HCL and R
+    raw strings) whose bodies would otherwise be mistaken for comments.
+
+    A character state machine rather than regular expressions, because the
+    question "is this `//` inside a string?" cannot be answered by matching
+    patterns; it depends on everything before it on the line.
     """
     out: list[str] = []
     i = 0
@@ -174,6 +252,44 @@ def _strip_state_machine(text: str, syntax: CommentSyntax) -> tuple[str, int]:
                 in_string = None
             i += 1
             continue
+
+        # A language-specific string whose body must be left untouched.
+        handled_special = False
+        for special in syntax.special:
+            if not text.startswith(special.opener, i):
+                continue
+            if special.at_line_end:
+                rest = text[i + len(special.opener) :]
+                if not (rest.startswith("\n") or rest.startswith("\r\n")):
+                    continue
+            close_at = text.find(special.closer, i + len(special.opener))
+            if close_at == -1:
+                out.append(text[i:])
+                i = n
+            else:
+                stop = close_at + len(special.closer)
+                out.append(text[i:stop])
+                i = stop
+            handled_special = True
+            break
+        if handled_special:
+            continue
+
+        # Groovy slashy string: `/.../` only in expression position, so that
+        # ordinary division like `total / count` is left alone.
+        if (
+            syntax.slashy_regex
+            and ch == "/"
+            and not text.startswith("//", i)
+            and not text.startswith("/*", i)
+        ):
+            prev = _last_significant(out)
+            if prev and prev in "(=,:[!&|?{;+-*%<>~^":
+                close_at = _find_slashy_close(text, i + 1)
+                if close_at is not None:
+                    out.append(text[i : close_at + 1])
+                    i = close_at + 1
+                    continue
 
         # String starts.
         if ch in "\"'`":
@@ -223,6 +339,39 @@ def _strip_state_machine(text: str, syntax: CommentSyntax) -> tuple[str, int]:
 
     _ = line_in_comment  # kept for readability of the state machine
     return "".join(out), removed_lines
+
+
+def _last_significant(out: list[str]) -> str:
+    """The most recent non-space character emitted so far.
+
+    Used to decide whether a `/` starts a Groovy slashy string or is division:
+    only an expression boundary before it makes it a string.
+    """
+    for chunk in reversed(out):
+        for ch in reversed(chunk):
+            if not ch.isspace():
+                return ch
+    return ""
+
+
+def _find_slashy_close(text: str, start: int) -> int | None:
+    """Index of the closing `/` of a Groovy slashy string, or None.
+
+    A slashy string cannot span lines, so reaching the newline means this was
+    division after all.
+    """
+    i = start
+    while i < len(text):
+        ch = text[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == "/":
+            return i
+        if ch == "\n":
+            return None
+        i += 1
+    return None
 
 
 def _newlines_in(segment: str) -> int:
