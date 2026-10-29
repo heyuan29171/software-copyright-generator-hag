@@ -56,18 +56,45 @@ EXCLUDES = [
 ]
 
 
-def build(*, console: bool = False) -> Path:
+def _find_upx() -> Path | None:
+    """Directory holding upx.exe, or None when it is not installed."""
+    found = shutil.which("upx")
+    if found:
+        return Path(found).parent
+    for base in (
+        Path.home() / "AppData/Local/Microsoft/WinGet/Packages",
+        Path("C:/Program Files"),
+        Path("C:/upx"),
+    ):
+        if base.is_dir():
+            for candidate in base.rglob("upx.exe"):
+                return candidate.parent
+    return None
+
+
+def build(*, console: bool = False, lite: bool = False) -> Path:
     """Build the executable.
 
     `console=True` produces a variant that keeps its console, used only by the
     self-test: a windowed build has no stdout, so verification output would be
-    invisible. The shipped artefact is always windowed.
+    invisible.
+
+    `lite=True` omits the MCP server and its dependencies. The MCP SDK brings in
+    cryptography, Pillow, lxml and pydantic, which is most of the file size; a
+    buyer using the window needs none of it. The lite build keeps the whole GUI
+    and generation pipeline, and `--mcp` reports that the server is unavailable
+    rather than failing obscurely.
     """
     for directory in (DIST, BUILD):
         if directory.exists():
             shutil.rmtree(directory)
 
-    name = APP_NAME if not console else f"{APP_NAME}-verify"
+    if console:
+        name = f"{APP_NAME}-verify"
+    elif lite:
+        name = f"{APP_NAME}-lite"
+    else:
+        name = APP_NAME
     # Both variants use the real entry point, so the verify build exercises the
     # same code paths as the shipped one. Earlier the verify build pointed at
     # the self-test script instead, which meant it could not be used to check
@@ -95,16 +122,55 @@ def build(*, console: bool = False) -> Path:
         str(ROOT / "src"),
         # Pull in the icon if one exists; skip silently otherwise.
         *(["--icon", str(ROOT / "assets" / "app.ico")] if (ROOT / "assets" / "app.ico").is_file() else []),
+        # Windows file properties: author, copyright and version, shown on the
+        # Details tab of the executable.
+        *(
+            ["--version-file", str(ROOT / "scripts" / "version_info.txt")]
+            if (ROOT / "scripts" / "version_info.txt").is_file()
+            else []
+        ),
     ]
 
-    for module in HIDDEN_IMPORTS:
+    hidden = list(HIDDEN_IMPORTS)
+    collect = list(COLLECT_SUBMODULES)
+    excludes = list(EXCLUDES)
+
+    if lite:
+        hidden = [m for m in hidden if not m.startswith("mcp")]
+        collect = [p for p in collect if p != "mcp"]
+        # The MCP SDK's own dependencies are the bulk of the size, and nothing
+        # else in the application imports them.
+        excludes += [
+            "mcp",
+            "cryptography",
+            "pydantic",
+            "pydantic_core",
+            "PIL",
+            "lxml",
+            "httpx",
+            "httpcore",
+            "h11",
+            "certifi",
+            "jsonschema",
+            "referencing",
+            "rpds",
+        ]
+
+    for module in hidden:
         args.extend(["--hidden-import", module])
 
-    for package in COLLECT_SUBMODULES:
+    for package in collect:
         args.extend(["--collect-submodules", package])
 
-    for module in EXCLUDES:
+    for module in excludes:
         args.extend(["--exclude-module", module])
+
+    # UPX compresses the bundled Python runtime. Without it the lite build sits
+    # just above the 30 MB single-file limit of the free upload space.
+    upx_dir = _find_upx()
+    if upx_dir is not None:
+        args.extend(["--upx-dir", str(upx_dir)])
+        args.extend(["--upx-exclude", "vcruntime140.dll"])
 
     args.append(str(entry))
 
@@ -129,4 +195,9 @@ def verify(exe: Path) -> None:
 
 
 if __name__ == "__main__":
-    verify(build(console="--console" in sys.argv))
+    verify(
+        build(
+            console="--console" in sys.argv,
+            lite="--lite" in sys.argv,
+        )
+    )

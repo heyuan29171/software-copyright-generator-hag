@@ -202,7 +202,12 @@ def render_code_pdf(
         _pt(cm_to_pt(layout.margin_top_cm)),
         _pt(cm_to_pt(layout.margin_right_cm)),
     )
-    pdf.set_creator("hag")
+    from . import __author__, __version__
+
+    # Record the tool and its author in the document metadata, so a PDF that
+    # turns up somewhere can be traced back to where it came from.
+    pdf.set_creator(f"hag {__version__} by {__author__}")
+    pdf.set_author(__author__)
     pdf.set_title(f"{header.software_name} {header.version}")
 
     try:

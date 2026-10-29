@@ -4,12 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hag"
-version = "0.1.0"
+version = "0.6.0"
 description = "Software copyright (软著) application material generator exposed as an MCP server"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
-authors = [{ name = "heyuan" }]
+license = { file = "LICENSE" }
+authors = [{ name = "heyuan", email = "heyuan29171@outlook.com" }]
 keywords = ["mcp", "software-copyright", "ruanzhu", "copyright"]
 classifiers = [
     "Programming Language :: Python :: 3.11",

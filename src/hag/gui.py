@@ -21,7 +21,7 @@ from typing import Any
 
 from .server import generate_materials, inspect_project
 
-WINDOW_TITLE = "软著申请材料生成器"
+WINDOW_TITLE = "软著申请材料生成器 — by heyuan"
 WINDOW_MIN_SIZE = (820, 640)
 
 
@@ -171,6 +171,24 @@ class App:
     # --- construction -------------------------------------------------------
 
     def _build_ui(self) -> None:
+        # Author and version sit at the top, above everything else: the window
+        # is the first thing a buyer sees, and a product without an author on
+        # it looks anonymous.
+        from . import __author__, __version__
+
+        header = ttk.Frame(self.root, padding=(12, 10, 12, 0))
+        header.pack(fill="x")
+        ttk.Label(
+            header,
+            text="软著申请材料生成器",
+            font=("Microsoft YaHei UI", 13, "bold"),
+        ).pack(side="left")
+        ttk.Label(
+            header,
+            text=f"v{__version__}　作者：{__author__}　联系：heyuan29171@outlook.com",
+            foreground="#666666",
+        ).pack(side="left", padx=(12, 0))
+
         outer = ttk.Frame(self.root, padding=12)
         outer.pack(fill="both", expand=True)
 
@@ -178,6 +196,14 @@ class App:
         self._build_details_section(outer)
         self._build_actions(outer)
         self._build_output(outer)
+
+        footer = ttk.Frame(self.root, padding=(12, 0, 12, 8))
+        footer.pack(fill="x")
+        ttk.Label(
+            footer,
+            text="版权所有 (c) 2026 heyuan。本软件为专有软件，未经许可不得复制、分发或用于商业用途。",
+            foreground="#999999",
+        ).pack(side="left")
 
     def _build_project_section(self, parent: ttk.Frame) -> None:
         box = ttk.LabelFrame(parent, text="1. 项目与输出", padding=10)
