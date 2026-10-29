@@ -315,6 +315,9 @@ class App:
         self.scan_button = ttk.Button(bar, text="扫描项目", command=self._on_scan)
         self.scan_button.pack(side="left")
 
+        self.env_button = ttk.Button(bar, text="环境检查", command=self._on_check_env)
+        self.env_button.pack(side="left", padx=(8, 0))
+
         self.run_button = ttk.Button(bar, text="生成材料", command=self._on_generate)
         self.run_button.pack(side="left", padx=8)
 
@@ -390,6 +393,23 @@ class App:
             first_publication_date=self.pub_date_var.get().strip(),
             first_publication_place=self.pub_place_var.get().strip(),
         )
+
+    def _on_check_env(self) -> None:
+        """Report whether this machine can actually produce material."""
+        from .environment import run_all
+
+        out = self.output_var.get().strip()
+        report = run_all(Path(out) if out else None)
+        self._append("环境检查：")
+        for line in report.to_text().splitlines():
+            self._append(line)
+        if report.can_run:
+            self._append("结论：可以生成材料。")
+        else:
+            messagebox.showerror(
+                "环境不满足要求",
+                "\n".join(f"{i.name}：{i.detail}" for i in report.failures),
+            )
 
     def _on_scan(self) -> None:
         root = self.project_var.get().strip()

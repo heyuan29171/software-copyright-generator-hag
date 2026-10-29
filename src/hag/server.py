@@ -67,6 +67,11 @@ TOOL_DESCRIPTIONS = {
         "Return the layout rules and their authority, so the answer to 'why 50 "
         "lines' or 'why is the page number top right' is traceable."
     ),
+    "check_environment": (
+        "Report whether this machine can produce material: Python version, PDF "
+        "library, PDF reader, fonts and whether the output directory is "
+        "writable. Call this before a long generation on an unfamiliar machine."
+    ),
     "review_manual": (
         "Check a manual outline against the required structure before writing it "
         "out: the six chapters in order, FAQ and glossary last, a reason and "
@@ -389,6 +394,33 @@ def review_manual(
     }
 
 
+def check_environment(output_dir: str | None = None) -> dict[str, Any]:
+    """Report whether this machine can produce material.
+
+    Answers the question a user has before a long run: are the PDF library,
+    fonts and output directory all usable? A missing font is cheap to fix now
+    and expensive to discover halfway through.
+    """
+    from pathlib import Path
+
+    from .environment import run_all
+
+    report = run_all(Path(output_dir) if output_dir else None)
+    return {
+        "ok": report.can_run,
+        "checks": [
+            {
+                "name": i.name,
+                "status": i.status.value,
+                "detail": i.detail,
+                "fix": i.fix,
+            }
+            for i in report.items
+        ],
+        "summary": report.to_text(),
+    }
+
+
 def explain_rules() -> dict[str, Any]:
     """State the layout rules and where each came from."""
     return {
@@ -444,6 +476,7 @@ def create_server() -> Any:
         ("estimate_material", estimate_material),
         ("generate_materials", generate_materials),
         ("check_fields", check_fields),
+        ("check_environment", check_environment),
         ("review_manual", review_manual),
         ("explain_rules", explain_rules),
     ):
@@ -458,6 +491,7 @@ def main() -> None:
 
 
 __all__ = [
+    "check_environment",
     "check_fields",
     "create_server",
     "estimate_material",

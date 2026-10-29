@@ -51,6 +51,12 @@ _DASH = CommentSyntax(line=("--",))
 _SEMI = CommentSyntax(line=(";",))
 _HTML = CommentSyntax(block=(("<!--", "-->"),))
 
+# Single-file components mix dialects: a Vue or Svelte file holds an HTML
+# template, a script block and a style block, so all three comment styles can
+# appear. Treating them as C-like only left `<!-- -->` in place, which is a
+# real omission rather than a safe conservative choice.
+_SFC = CommentSyntax(line=("//",), block=(("/*", "*/"), ("<!--", "-->")))
+
 # Languages we can strip fully with the state machine.
 _FULL_STRIP: dict[str, CommentSyntax] = {
     ".c": _C_LIKE,
@@ -78,8 +84,8 @@ _FULL_STRIP: dict[str, CommentSyntax] = {
     ".css": CommentSyntax(block=(("/*", "*/"),)),
     ".scss": CommentSyntax(line=("//",), block=(("/*", "*/"),)),
     ".less": CommentSyntax(line=("//",), block=(("/*", "*/"),)),
-    ".vue": _C_LIKE,
-    ".svelte": _C_LIKE,
+    ".vue": _SFC,
+    ".svelte": _SFC,
     ".html": _HTML,
     ".htm": _HTML,
     ".xml": _HTML,
