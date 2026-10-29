@@ -164,7 +164,12 @@ def assert_coverage(fonts: FontPair, texts: Iterable[str]) -> None:
 
 
 # Substitution for characters the material fonts cannot draw.
-UNRENDERABLE_SUBSTITUTE = "?"
+# Substitution for characters the material fonts cannot draw. A numbered form
+# rather than a bare "?" because a single placeholder destroys distinctness: an
+# emoji lookup table became `'?': 'candle'` and `'?': 'gem'`, which are the same
+# key. `<U+1F56F>` keeps two different characters visibly different while
+# staying printable in any font.
+UNRENDERABLE_SUBSTITUTE = "<U+%04X>"
 
 # Range of code points that are almost certainly decorative when they appear in
 # source: emoji, pictographs, dingbats used as bullets, variation selectors and
@@ -194,6 +199,10 @@ def sanitize_unrenderable(text: str, fonts: FontPair) -> tuple[str, list[str]]:
     string is a normal thing to find in a real project, and refusing to produce
     any material because of one is a worse outcome than printing a placeholder
     and saying so. The substitution is visible, never silent.
+
+    Each placeholder carries the code point, so two different emoji stay
+    distinguishable. A single "?" made `'?': 'candle'` and `'?': 'gem'` the same
+    key, silently changing what the code means.
     """
     out: list[str] = []
     replaced: list[str] = []
@@ -204,7 +213,7 @@ def sanitize_unrenderable(text: str, fonts: FontPair) -> tuple[str, list[str]]:
         if fonts.mono.has(char) or fonts.cjk.has(char):
             out.append(char)
             continue
-        out.append(UNRENDERABLE_SUBSTITUTE)
+        out.append(UNRENDERABLE_SUBSTITUTE % ord(char))
         if char not in replaced:
             replaced.append(char)
     return "".join(out), replaced

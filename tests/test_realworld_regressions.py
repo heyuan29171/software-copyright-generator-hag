@@ -47,7 +47,20 @@ class TestEmojiDoesNotAbort:
         text, replaced = sanitize_unrenderable("a\U0001F514b\U0001F4E3c", fonts)
         assert "\U0001F514" in replaced
         assert "\U0001F4E3" in replaced
-        assert "?" in text
+        # Placeholders carry the code point so distinct characters stay
+        # distinct; a bare "?" would collapse an emoji lookup table.
+        assert "U+1F514" in text
+        assert "U+1F4E3" in text
+
+    def test_distinct_characters_get_distinct_placeholders(self) -> None:
+        """An icon table maps emoji to names; collapsing them to one key would
+        silently change what the code does."""
+        fonts = resolve_font_pair()
+        text, _ = sanitize_unrenderable("'\U0001F52F': 'candle', '\U0001F319': 'moon'", fonts)
+        keys = [part.strip() for part in text.split(":")]
+        assert keys[0] != keys[1]
+        assert "U+1F52F" in text
+        assert "U+1F319" in text
 
     def test_renderable_text_untouched(self) -> None:
         fonts = resolve_font_pair()
