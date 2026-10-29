@@ -16,7 +16,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .comments import StripMethod, strip_comments
+from .content_checks import ContentSuspicion, merge, scan_line
 from .discovery import DiscoveryResult, SourceFile, discover
+from .entry_point import choose_opening
+from .masking import MaskReport, mask_line
 from .layout import CODE_LAYOUT, LINES_PER_PAGE, CodeLayout, assert_layout_invariants
 from .pagination import material_lines, max_columns_for, paginate
 from .render_pdf import HeaderSpec, RenderResult, render_code_pdf
@@ -128,11 +131,30 @@ def prefer_low_cjk_order(files: Sequence[CleanedFile]) -> list[CleanedFile]:
     return sorted(files, key=lambda f: (band(f), f.cjk_ratio))
 
 
+def promote_entry_point(files: Sequence[CleanedFile]) -> list[CleanedFile]:
+    """Move the best entry-point candidate to the front, if there is one.
+
+    Only the front position changes; every other file keeps its place. If no
+    file looks like an entry point, the order is returned untouched, because
+    promoting an arbitrary file would be worse than leaving it alone.
+    """
+    index = choose_opening(
+        [(f.rel_path, "\n".join(f.lines[:40])) for f in files]
+    )
+    if index is None or index == 0:
+        return list(files)
+    ordered = list(files)
+    ordered.insert(0, ordered.pop(index))
+    return ordered
+
+
 @dataclass(slots=True)
 class CleanResult:
     files: list[CleanedFile] = field(default_factory=list)
     skipped_partial: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    mask_report: MaskReport = field(default_factory=MaskReport)
+    suspicions: ContentSuspicion = field(default_factory=ContentSuspicion)
 
     def spans(self) -> list[FileSpan]:
         return [
@@ -151,12 +173,21 @@ def clean_sources(
     layout: CodeLayout = CODE_LAYOUT,
     lines_per_page: int = LINES_PER_PAGE,
     drop_cjk: bool = False,
+    applicant: str = "",
+    mask_secrets: bool = True,
 ) -> CleanResult:
     """Strip comments, drop blanks and wrap, producing paginatable lines.
 
     `drop_cjk` additionally removes lines that are Chinese prose with no code
     in them. It is off by default: deleting source is a last resort, and the
     usual fix for too much Chinese is to draw the pages from cleaner files.
+
+    `mask_secrets` replaces credentials, private addresses and contact details
+    with asterisks. It is on by default: the material is sent to a third party,
+    and a leaked key in a submitted document is worse than a masked one.
+
+    `applicant` is the copyright holder's name; it is used to tell the
+    applicant's own organisation apart from someone else's.
     """
     max_columns = max_columns_for(layout)
     result = CleanResult()
@@ -174,6 +205,19 @@ def clean_sources(
                 f"{source.rel_path}: nothing remains after cleaning (all comments or blank)"
             )
             continue
+
+        if mask_secrets:
+            masked_lines: list[str] = []
+            for line_no, line in enumerate(lines, start=1):
+                masked, fired = mask_line(line)
+                if fired:
+                    result.mask_report.record(source.rel_path, line_no, fired)
+                masked_lines.append(masked)
+            lines = masked_lines
+
+        for line_no, line in enumerate(lines, start=1):
+            found = scan_line(source.rel_path, line_no, line, applicant)
+            merge(result.suspicions, found)
 
         cleaned = CleanedFile(
             rel_path=source.rel_path,
@@ -283,6 +327,8 @@ def run_code_pipeline(
     exclude: Sequence[str] | None = None,
     render: bool = True,
     drop_cjk: bool = False,
+    applicant: str = "",
+    mask_secrets: bool = True,
 ) -> PipelineResult:
     """Discover, clean, select, paginate and (optionally) render.
 
@@ -300,7 +346,12 @@ def run_code_pipeline(
         )
 
     cleaned = clean_sources(
-        sources, layout=layout, lines_per_page=lines_per_page, drop_cjk=drop_cjk
+        sources,
+        layout=layout,
+        lines_per_page=lines_per_page,
+        drop_cjk=drop_cjk,
+        applicant=applicant,
+        mask_secrets=mask_secrets,
     )
     if not cleaned.files:
         raise PipelineError("every discovered file was empty after cleaning")
@@ -311,6 +362,10 @@ def run_code_pipeline(
     # Chinese lines would falsify the source, so the ordering is what keeps the
     # Chinese-line count down instead.
     ordered = prefer_low_cjk_order(cleaned.files)
+    # The first page is what a reviewer sees first, so an entry point makes a
+    # stronger opening than whichever file happens to be cleanest. This only
+    # reorders; it never changes which files are used.
+    ordered = promote_entry_point(ordered)
     spans = [
         FileSpan(
             rel_path=f.rel_path,

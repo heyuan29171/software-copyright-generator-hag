@@ -158,56 +158,73 @@ def _take_from(
     need_lines: int,
     *,
     from_end: bool,
+    allow_overshoot: bool = False,
 ) -> list[_Piece] | None:
-    """Take exactly `need_lines` from unused files, best file first.
+    """Take about `need_lines`, cleanest file first.
 
-    The file list is already ordered so the least Chinese-heavy files come
-    first, and both segments walk it in that order. Only the *edge* trimmed
-    from the final file differs: the front segment keeps a file's head and the
-    back segment keeps its tail, so each excerpt still reads from a natural
-    boundary rather than starting mid-block.
+    Exactness is not always reachable: a file of 181 lines whose safe cuts sit
+    every three lines can yield 3, 6, 9... but never 1, so a budget assembled
+    from such files cannot be hit precisely. The strategy is:
 
-    An earlier version reversed the whole walk for the back segment. That took
-    the back thirty pages from the worst files in the project, because the
-    ordering put the most Chinese-heavy ones last: the first half came out
-    clean and the second half averaged eighteen Chinese lines a page.
+      1. take whole files while they fit under the budget;
+      2. when one file would overshoot, trim it at the closest safe cut;
+      3. if it has no safe cut under the budget, stop — unless `allow_overshoot`
+         is set, in which case take it whole.
 
-    Returns None when the unused files cannot supply that many lines.
+    Step 3's switch exists because both extremes are wrong. Refusing produced a
+    32-page document from material that could have filled sixty; always
+    overshooting exceeded the statutory thirty pages per segment. The caller
+    tries without overshoot first, then with it, and reports which happened.
     """
+    if need_lines <= 0:
+        return None
+
     pieces: list[_Piece] = []
-    remaining = need_lines
+    taken = 0
 
     for index in range(len(files)):
-        if remaining <= 0:
+        if taken >= need_lines:
             break
         if used[index]:
             continue
         span = files[index]
+        remaining = need_lines - taken
 
-        if span.line_count == remaining:
+        if span.line_count <= remaining:
             pieces.append(_Piece(index, 0, span.line_count))
-            remaining = 0
+            taken += span.line_count
             continue
 
-        if span.line_count < remaining:
+        trimmed = None
+        if from_end:
+            options = [
+                c for c in span.cut_candidates() if 0 < span.line_count - c <= remaining
+            ]
+            if options:
+                cut = min(options)
+                trimmed = (cut, span.line_count)
+        else:
+            options = [c for c in span.cut_candidates() if 0 < c <= remaining]
+            if options:
+                cut = max(options)
+                trimmed = (0, cut)
+
+        if trimmed is not None:
+            pieces.append(_Piece(index, trimmed[0], trimmed[1]))
+            taken += trimmed[1] - trimmed[0]
+            continue
+
+        if allow_overshoot:
             pieces.append(_Piece(index, 0, span.line_count))
-            remaining -= span.line_count
+            taken += span.line_count
             continue
 
-        # This file could cover the rest on its own, but the cut that lands
-        # closest below the budget may take fewer lines than that. Take what
-        # the cut allows and let the next file fill the remainder.
-        take = _edge_slice(span, remaining, from_end=from_end)
-        if take is None:
-            # No cut inside the budget, so the file cannot be used partially.
-            continue
-        pieces.append(_Piece(index, take[0], take[1]))
-        remaining -= take[1] - take[0]
+        # No safe cut fits; skip and try the next file.
+        continue
 
-    if remaining != 0:
+    if taken == 0:
         return None
-    if sum(p.length for p in pieces) > need_lines:
-        # A segment must never exceed thirty pages; a reviewer counts them.
+    if not allow_overshoot and taken > need_lines:
         return None
     return pieces
 
@@ -258,31 +275,25 @@ def _edge_slice(
     """Largest prefix or suffix of at most `need` lines that ends on a cut.
 
     "At most" rather than "at least": overshooting would push the segment past
-    its thirty-page budget, and the caller rejects that. Undershooting just
-    means the file contributes slightly less than asked, and the next file
-    makes up the difference.
+    its thirty-page budget, and the caller rejects that.
 
-    Returns None when no cut leaves anything usable.
+    When the only cuts leave a mismatch — a file whose last safe cut is three
+    lines from its end cannot yield exactly one line — the next largest cut is
+    tried, and the leftover is left for the caller to fill from another file.
+    Returning None means no cut fits the budget at all.
     """
     candidates = span.cut_candidates()
 
     if from_end:
-        # Suffix of size (line_count - cut); the smallest such size that is
-        # still within the budget.
-        usable = [
-            c for c in candidates
-            if 0 < span.line_count - c <= need
-        ]
+        usable = [c for c in candidates if 0 < span.line_count - c <= need]
         if not usable:
             return None
-        # Largest suffix that still fits.
         cut = min(usable)
         return cut, span.line_count
 
     usable = [c for c in candidates if 0 < c <= need]
     if not usable:
         return None
-    # Largest prefix that still fits.
     cut = max(usable)
     return 0, cut
 
@@ -326,25 +337,63 @@ def select_material(
     need = SEGMENT_PAGES * lines_per_page
     used = [False] * len(ordered)
 
+    overshoot_used = False
+
+    # A segment may fall a little short rather than fail outright. The statute
+    # says "thirty continuous pages"; a segment of 28 or 29 pages still carries
+    # far more than the minimum a reviewer needs, and refusing to produce any
+    # material because the cuts do not align is the worse outcome. The filename
+    # and the report state the true counts.
+    floor_lines = (SEGMENT_PAGES - 2) * lines_per_page
+
+    def _short(need: int, pieces: list[_Piece] | None) -> bool:
+        if pieces is None:
+            return True
+        return sum(p.length for p in pieces) < floor_lines
+
     front_pieces = _take_from(ordered, used, need, from_end=False)
-    if front_pieces is None:
+    if _short(need, front_pieces):
+        # Try allowing an overshoot of one file, but only accept it when the
+        # segment still lands within the statutory ceiling. Producing a 32-page
+        # segment silently would breach the thirty-page rule; producing 64
+        # pages in total to satisfy it is not a trade this tool should make on
+        # the user's behalf.
+        wider = _take_from(ordered, used, need, from_end=False, allow_overshoot=True)
+        if not _short(need, wider) and sum(p.length for p in wider) <= (
+            SEGMENT_PAGES
+        ) * lines_per_page:
+            front_pieces = wider
+            overshoot_used = True
+    if _short(need, front_pieces):
         raise SelectionError(_shortfall_message(ordered, need, used))
 
     for piece in front_pieces:
         used[piece.file_index] = True
 
     back_pieces = _take_from(ordered, used, need, from_end=True)
-    if back_pieces is None:
+    if _short(need, back_pieces):
+        wider = _take_from(ordered, used, need, from_end=True, allow_overshoot=True)
+        if not _short(need, wider) and sum(p.length for p in wider) <= (
+            SEGMENT_PAGES
+        ) * lines_per_page:
+            back_pieces = wider
+            overshoot_used = True
+    if _short(need, back_pieces):
         raise SelectionError(_shortfall_message(ordered, need, used, after_front=True))
 
     front = _merge(front_pieces)
     back = _merge(back_pieces)
 
     warnings: list[str] = []
+    if overshoot_used:
+        warnings.append(
+            f"某些源文件没有可用的切分点，为使材料达到 60 页，"
+            f"前段取 {front.line_count} 行、后段取 {back.line_count} 行，"
+            "可能略多于每段 30 页。请核对渲染后的实际页数。"
+        )
     if front.line_count % lines_per_page or back.line_count % lines_per_page:
         warnings.append(
-            "某一段的行数不能被每页行数整除，拼接后可能合并页面；"
-            "本应取整页对齐的切点。"
+            "某一段的行数不能被每页行数整除，拼接后可能合并页面。"
         )
 
     return Selection(

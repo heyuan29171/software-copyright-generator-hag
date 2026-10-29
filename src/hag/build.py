@@ -22,6 +22,10 @@ from .audit import (
     Level,
     Report,
     check_cjk_line_density,
+    check_content_suspicions,
+    check_masking,
+    check_page_edges,
+    check_total_source_size,
     check_comment_residue,
     check_header,
     check_input_completeness,
@@ -85,6 +89,7 @@ def build_materials(
     exclude: list[str] | None = None,
     render: bool = True,
     drop_cjk: bool = False,
+    mask_secrets: bool = True,
 ) -> BuildResult:
     """Generate the code material, the form values and a verification report."""
     if not software_name.strip():
@@ -120,6 +125,8 @@ def build_materials(
             exclude=exclude,
             render=render,
             drop_cjk=drop_cjk,
+            applicant=fields.owner if fields is not None else "",
+            mask_secrets=mask_secrets,
         )
     except PipelineError as exc:
         pipeline_error = str(exc)
@@ -193,6 +200,12 @@ def build_materials(
             )
         )
         report.extend(check_cjk_line_density(result.pages, MAX_CJK_LINES_PER_PAGE))
+        report.extend(
+            check_page_edges(
+                result.pages[0][0] if result.pages and result.pages[0] else "",
+                result.pages[-1][-1] if result.pages and result.pages[-1] else "",
+            )
+        )
         if result.render and result.render.replaced_characters:
             report.add(
                 Check(
@@ -207,6 +220,24 @@ def build_materials(
                 )
             )
     report.extend(check_header(header.left, software_name, version))
+
+    # Practice-derived checks: they do not block a submission, but each one is
+    # something a reviewer has been known to query.
+    report.extend(check_total_source_size(result.selection.total_lines))
+    suspicions = result.cleaned.suspicions
+    report.extend(
+        check_content_suspicions(
+            [(f.path, f.line_no, f.text) for f in suspicions.foreign_companies],
+            [(f.path, f.line_no, f.text) for f in suspicions.dates],
+            [(f.path, f.line_no, f.text) for f in suspicions.old_years],
+        )
+    )
+    report.extend(
+        check_masking(
+            result.cleaned.mask_report.total_replacements,
+            result.cleaned.mask_report.summary(),
+        )
+    )
     # Compare what was drawn into the document against what the form will
     # carry. Both currently derive from the same argument, so this only fires
     # if a future change lets them drift apart — which is exactly the class of

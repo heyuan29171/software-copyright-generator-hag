@@ -401,6 +401,149 @@ def check_cjk_line_density(
     ]
 
 
+def check_total_source_size(total_lines: int, minimum: int = 2000) -> list[Check]:
+    """Warn when the program is very small.
+
+    Practice puts the line where a very small program invites questions about
+    whether it is a real product. The statute has no minimum, so this is a
+    warning, and the threshold is deliberately low: a genuinely small tool is
+    legitimate, and refusing to produce material for it would be wrong.
+    """
+    if total_lines <= 0:
+        return [Check("W-23", Level.FAIL, "没有可用源码")]
+
+    if total_lines < minimum:
+        return [
+            Check(
+                "W-23",
+                Level.WARN,
+                f"全部源码仅 {total_lines} 行",
+                f"低于 {minimum} 行时，材料可能显得体量偏小；建议在说明书中说明独创性",
+                "行业实践（法规无下限）",
+                "如有更多模块可一并纳入",
+            )
+        ]
+
+    return [Check("W-23", Level.PASS, f"源码共 {total_lines} 行")]
+
+
+def check_page_edges(
+    first_line: str,
+    last_line: str,
+) -> list[Check]:
+    """The first and last page should not look cut off mid-block.
+
+    A reader who opens page one and sees an indented fragment concludes the
+    excerpt starts in the middle of something. The opening line should sit at
+    the file's own base indentation, and the closing line should end a block
+    rather than trail off.
+    """
+    checks: list[Check] = []
+
+    if not first_line.strip():
+        checks.append(Check("W-24", Level.WARN, "材料第一行为空"))
+    elif len(first_line) - len(first_line.lstrip()) > 0:
+        checks.append(
+            Check(
+                "W-24",
+                Level.WARN,
+                "第一行是缩进代码，可能看起来像从中间截断",
+                f"首行：{first_line.strip()[:40]}",
+                "行业实践（非法条）",
+                "调整起始文件，使首页从模块开头开始",
+            )
+        )
+    else:
+        checks.append(Check("W-24", Level.PASS, "首页从模块开头开始"))
+
+    stripped = last_line.strip()
+    if not stripped:
+        checks.append(Check("W-25", Level.WARN, "材料最后一行为空"))
+    elif stripped.endswith((";", ",", "+", "-", "&&", "||", "=", ".")):
+        checks.append(
+            Check(
+                "W-25",
+                Level.WARN,
+                "最后一行以运算符或分号结尾，可能不是完整模块的结束",
+                f"末行：{stripped[:40]}",
+                "行业实践（非法条）",
+                "调整结束位置，使末页结束于完整模块",
+            )
+        )
+    else:
+        checks.append(Check("W-25", Level.PASS, "末页结束于完整模块"))
+
+    return checks
+
+
+def check_content_suspicions(
+    foreign_companies: Sequence[tuple[str, int, str]],
+    dates: Sequence[tuple[str, int, str]],
+    old_years: Sequence[tuple[str, int, str]],
+) -> list[Check]:
+    """Report content that invites questions about ownership or timing."""
+    checks: list[Check] = []
+
+    if foreign_companies:
+        listed = "；".join(f"{p}:{n}「{t[:30]}」" for p, n, t in foreign_companies[:5])
+        checks.append(
+            Check(
+                "W-26",
+                Level.WARN,
+                f"{len(foreign_companies)} 处出现他人公司名称",
+                listed,
+                "行业实践：材料中出现其他公司名称易被质疑权属",
+                "确认是否属实；属第三方版权的声明应删除",
+            )
+        )
+    else:
+        checks.append(Check("W-26", Level.PASS, "未发现他人公司名称"))
+
+    if dates:
+        listed = "；".join(f"{p}:{n}" for p, n, _ in dates[:5])
+        checks.append(
+            Check(
+                "W-27",
+                Level.WARN,
+                f"{len(dates)} 处含具体日期",
+                listed,
+                "行业实践：日期与著作权信息不符时易引发疑问",
+                "确认日期属实，或移除无关日期",
+            )
+        )
+
+    if old_years:
+        listed = "；".join(f"{p}:{n}" for p, n, _ in old_years[:5])
+        checks.append(
+            Check(
+                "W-28",
+                Level.WARN,
+                f"{len(old_years)} 处含较早年份",
+                listed,
+                "行业实践：年份过早可能引发原创性质疑",
+                "确认是否与开发完成日期相符",
+            )
+        )
+
+    return checks
+
+
+def check_masking(masked_rows: int, summary: str) -> list[Check]:
+    """Report how much was replaced by the masking pass."""
+    if masked_rows == 0:
+        return [Check("W-29", Level.PASS, "未发现需要脱敏的内容")]
+    return [
+        Check(
+            "W-29",
+            Level.WARN,
+            f"已脱敏 {masked_rows} 行敏感内容",
+            summary,
+            "行业实践：提交材料不应含密钥、内网地址或个人信息",
+            "检查替换是否恰当；如原值必须保留，请在提交前另行处理",
+        )
+    ]
+
+
 def check_output_files(paths: Sequence[Path]) -> list[Check]:
     """Every promised artifact must exist and be non-empty."""
     missing = [p for p in paths if not p.is_file()]

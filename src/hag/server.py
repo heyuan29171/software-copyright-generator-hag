@@ -222,6 +222,7 @@ def generate_materials(
     include: list[str] | None = None,
     exclude: list[str] | None = None,
     drop_cjk: bool = False,
+    mask_secrets: bool = True,
 ) -> dict[str, Any]:
     """Generate the PDF, form values and report.
 
@@ -245,6 +246,7 @@ def generate_materials(
             include=include,
             exclude=exclude,
             drop_cjk=drop_cjk,
+            mask_secrets=mask_secrets,
         )
     except PipelineError as exc:
         return {"ok": False, "error": str(exc)}
