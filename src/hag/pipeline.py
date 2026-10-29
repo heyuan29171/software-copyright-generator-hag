@@ -62,6 +62,71 @@ def _has_cjk(text: str) -> bool:
     return any("\u4e00" <= ch <= "\u9fff" for ch in text)
 
 
+UNRENDERABLE_RUN = 3
+"""Undrawable characters in one line before it is treated as an icon table.
+
+Counting, not a ratio. A short line holding a single emoji scores a higher
+ratio than a long table row holding eight, so ratios cannot separate them.
+Three keeps a sentence with two emoji and drops a table row.
+"""
+
+
+def _mostly_unrenderable(line: str, pair: object) -> bool:
+    """True when the line is an icon table rather than code."""
+    try:
+        missing = sum(
+            1
+            for ch in line
+            if not (pair.mono.has(ch) or pair.cjk.has(ch))  # type: ignore[attr-defined]
+        )
+    except Exception:
+        return False
+    return missing >= UNRENDERABLE_RUN
+
+
+def _ends_cleanly(lines: Sequence[str]) -> bool:
+    """Whether the last kept line leaves the program balanced.
+
+    Balanced brackets are the reliable signal, not the final character. A file
+    ending in `N);` looks truncated only when the matching opener is missing;
+    when every bracket closes, `);` is an ordinary statement ending and there
+    is nothing wrong with the excerpt.
+
+    A file left with open brackets means the material stops inside a call or a
+    block, which a reviewer reads as an arbitrary cut.
+    """
+    if not lines:
+        return False
+    text = "\n".join(lines)
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    for ch in text:
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            continue
+        if ch in "\"'`":
+            quote = ch
+        elif ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+    # Negative depth means the excerpt begins inside a block, which is the
+    # front segment's problem rather than this one; only a positive depth means
+    # the excerpt stops before closing what it opened.
+    if depth > 0:
+        return False
+    last = lines[-1].strip()
+    if not last:
+        return False
+    return not last.endswith((",", "+", "-", "*", "&&", "||", "=", "."))
+
+
 def safe_cut_offsets(lines: Sequence[str]) -> tuple[int, ...]:
     """Offsets where the material may be split without breaking a unit.
 
@@ -154,6 +219,7 @@ class CleanResult:
     skipped_partial: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     mask_report: MaskReport = field(default_factory=MaskReport)
+    skipped_unrenderable: list[tuple[str, int]] = field(default_factory=list)
     suspicions: ContentSuspicion = field(default_factory=ContentSuspicion)
 
     def spans(self) -> list[FileSpan]:
@@ -162,6 +228,8 @@ class CleanResult:
                 rel_path=f.rel_path,
                 line_count=f.line_count,
                 safe_cuts=safe_cut_offsets(f.lines),
+                cjk_ratio=f.cjk_ratio,
+                ends_cleanly=_ends_cleanly(f.lines),
             )
             for f in self.files
         ]
@@ -205,6 +273,26 @@ def clean_sources(
                 f"{source.rel_path}: nothing remains after cleaning (all comments or blank)"
             )
             continue
+
+        # Drop lines that are mostly characters the fonts cannot draw. An icon
+        # lookup table is four to eight emoji per line: once replaced it reads
+        # as `<U+1F56F><U+FE0F>': 'candle',` noise rather than as a program.
+        # Ordinary code carries one or two emoji at most and is kept.
+        from .fonts import resolve_font_pair as _resolve
+
+        try:
+            pair = _resolve()
+        except Exception:
+            pair = None
+
+        if pair is not None:
+            kept: list[str] = []
+            for line_no, line in enumerate(lines, start=1):
+                if _mostly_unrenderable(line, pair):
+                    result.skipped_unrenderable.append((source.rel_path, line_no))
+                    continue
+                kept.append(line)
+            lines = kept
 
         if mask_secrets:
             masked_lines: list[str] = []
@@ -371,6 +459,8 @@ def run_code_pipeline(
             rel_path=f.rel_path,
             line_count=f.line_count,
             safe_cuts=safe_cut_offsets(f.lines),
+            cjk_ratio=f.cjk_ratio,
+            ends_cleanly=_ends_cleanly(f.lines),
         )
         for f in ordered
     ]

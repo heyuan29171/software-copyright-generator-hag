@@ -48,6 +48,14 @@ class FileSpan:
     safe_cuts: tuple[int, ...] = ()
     cjk_ratio: float = 0.0
     """Share of lines containing Chinese, used to prefer cleaner sources."""
+    ends_cleanly: bool = True
+    """Whether the last line closes a syntactic unit.
+
+    A file ending in `N);` stops mid-call. Using it as the *last* file of the
+    back segment makes the material end that way, which a reviewer reads as an
+    arbitrarily truncated excerpt. The scanner decides this; files that end
+    badly are still usable elsewhere in a segment.
+    """
 
     def __post_init__(self) -> None:
         if self.line_count < 0:
@@ -182,7 +190,14 @@ def _take_from(
     pieces: list[_Piece] = []
     taken = 0
 
-    for index in range(len(files)):
+    # The back segment ends the document, so it should end on a file whose last
+    # line closes a unit. Files that stop mid-call are still usable in the
+    # middle of a segment, just not at its end.
+    order = list(range(len(files)))
+    if from_end:
+        order.sort(key=lambda i: 0 if files[i].ends_cleanly else 1)
+
+    for index in order:
         if taken >= need_lines:
             break
         if used[index]:

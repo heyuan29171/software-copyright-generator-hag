@@ -132,10 +132,16 @@ LAST_PAGE_MIN_RATIO = Decimal("2") / Decimal("3")
 MAX_LINE_CHARS_HARD_CAP = 3000
 
 # [推] Upper bound on how many lines of a page may contain CJK characters.
-# Material that is mostly Chinese prose reads as a document rather than as a
-# program, and reviewers expect the identifying material to look like source
-# code. Zero disables the limit.
-MAX_CJK_LINES_PER_PAGE = 10
+#
+# Not a rule the authorities state. The concern is that material reading as
+# Chinese prose looks like a document rather than a program. Ten was too strict
+# in practice: a Chinese-language game has interface text in a large share of
+# its source, and real projects averaged two or three Chinese lines per page
+# while a handful of pages reached the mid-twenties.
+#
+# Twenty accepts the ordinary case for a Chinese project while still flagging a
+# page that is mostly prose. Zero disables the check.
+MAX_CJK_LINES_PER_PAGE = 20
 
 # [官] 问题问答: page number sits at the top-right, plain digits.
 PAGE_NUMBER_POSITION = "top-right"
